@@ -80,6 +80,14 @@ async function busy(btn, label, fn) {
   }
 }
 
+// restart a pane's entrance when what it shows changes
+function enterView(node) {
+  if (!node || !node.classList) return;
+  node.classList.remove("view-enter");
+  void node.offsetWidth;
+  node.classList.add("view-enter");
+}
+
 const initial = (s) => ((s || "?").trim()[0] || "?").toUpperCase();
 const fitOf = (r) => (r.fit || {}).score;
 
@@ -368,6 +376,7 @@ function fact(k, v, hi) {
 function openRole(r) {
   const d = $("#roleDetail");
   d.innerHTML = "";
+  enterView(d);
   d.appendChild(el("p", "doc-kicker",
     [r.source, r.days_listed ? `${r.days_listed} days listed` : ""]
       .filter(Boolean).join(" · ") || "role"));
@@ -505,46 +514,122 @@ function openRole(r) {
 /* --- search ------------------------------------------------------------ */
 LOADERS.search = function () { $("#q").focus && $("#q").focus(); };
 
+const SR = { results: [], filter: "all" };
+
+// what a result's state looks like, and what you can do about it
+function resultState(r) {
+  if (r.already_tracked) return "tracked";
+  if (r.removed_before) return "removed";
+  return "new";
+}
+
 async function runSearch() {
   const q = $("#q").value.trim();
   if (!q) return;
-  const host = $("#results");
   const isUrl = /^https?:\/\//i.test(q);
   await busy($("#qGo"), isUrl ? "Reading…" : "Searching…", async () => {
     const d = isUrl
       ? await api("/api/jobs/search/url", { url: q, use_browser: $("#qBrowser").checked })
       : await api("/api/jobs/search", { query: q });
-    const results = d.results || d.roles || [];
-    host.innerHTML = "";
-    if (!results.length) {
-      empty(host, "Nothing found", d.note || d.detail || "Try broader words.");
-      return;
-    }
-    const bar = el("div", "bar");
-    const addAll = el("button", "btn primary sm", `Track all ${results.length}`);
-    addAll.addEventListener("click", () => busy(addAll, "Adding…", async () => {
-      const x = await api("/api/jobs/search/add", { roles: results });
-      toast(`Now tracking ${x.added ?? results.length}.`);
-      await refresh();
-    }));
-    bar.appendChild(addAll);
-    host.appendChild(bar);
-    results.forEach((r) => {
-      const it = el("div", "item static");
+    SR.results = d.results || [];
+    SR.note = d.note || d.detail || "";
+    SR.filter = "all";
+    drawResults();
+  });
+}
+
+async function track(items, restore, btn) {
+  // Sent as "items" — the route's field. It once went as "roles", the server
+  // quietly ignored it, answered ok with nothing added, and the window
+  // showed every role as tracked.
+  const run = async () => {
+    const x = await api("/api/jobs/search/add", { items, restore: !!restore });
+    const byKey = {};
+    (x.outcomes || []).forEach((o) => { byKey[o.key] = o.status; });
+    SR.results.forEach((r) => {
+      const s = byKey[r.key];
+      if (s === "added" || s === "already tracked") {
+        r.already_tracked = true; r.removed_before = false;
+      }
+    });
+    const n = (x.outcomes || []).reduce((a, o) => {
+      a[o.status] = (a[o.status] || 0) + 1; return a; }, {});
+    const parts = [];
+    if (n["added"]) parts.push(`Now tracking ${n["added"]}`);
+    if (n["already tracked"]) parts.push(`${n["already tracked"]} already tracked`);
+    if (n["removed earlier"]) parts.push(`${n["removed earlier"]} removed earlier — use Restore`);
+    if (n["not a role"]) parts.push(`${n["not a role"]} didn't look like a real role`);
+    toast(parts.join(" · ") || "Nothing changed.", n["added"] ? "" : "warn");
+    await refresh();
+    drawResults();
+  };
+  return btn ? busy(btn, restore ? "Restoring…" : "Tracking…", run) : run();
+}
+
+function drawResults() {
+  const host = $("#results");
+  host.innerHTML = "";
+  const all = SR.results;
+  if (!all.length) {
+    empty(host, "Nothing found", SR.note || "Try broader words.");
+    return;
+  }
+  const count = { all: all.length, new: 0, tracked: 0, removed: 0 };
+  all.forEach((r) => { count[resultState(r)]++; });
+
+  // the summary says what's already yours before you touch anything
+  const bar = el("div", "bar result-bar");
+  const sum = el("div", "result-sum");
+  sum.innerHTML = `<b>${all.length}</b> found · <span class="t-new">${count.new} new</span>`
+    + ` · <span class="t-tracked">${count.tracked} already tracked</span>`
+    + (count.removed ? ` · <span class="t-removed">${count.removed} removed earlier</span>` : "");
+  bar.appendChild(sum);
+  const chips = el("div", "chips");
+  chips.style.margin = "0";
+  [["all", "All"], ["new", "New"], ["tracked", "Tracked"], ["removed", "Removed"]]
+    .filter(([k]) => k === "all" || count[k])
+    .forEach(([k, label]) => {
+      const c = el("button", "chip" + (SR.filter === k ? " is-on" : ""),
+                   `${label} ${count[k]}`);
+      c.addEventListener("click", () => { SR.filter = k; drawResults(); });
+      chips.appendChild(c);
+    });
+  bar.appendChild(chips);
+  if (count.new) {
+    const fresh = all.filter((r) => resultState(r) === "new");
+    const all_ = el("button", "btn primary sm", `Track ${count.new} new`);
+    all_.addEventListener("click", () => track(fresh, false, all_));
+    bar.appendChild(all_);
+  }
+  host.appendChild(bar);
+
+  all.filter((r) => SR.filter === "all" || resultState(r) === SR.filter)
+    .forEach((r) => {
+      const st = resultState(r);
+      const it = el("div", "item static result is-" + st);
       const body = el("div");
-      body.append(el("div", "item-t", r.title || "(untitled)"),
-                  el("div", "item-m", [r.company, r.location, r.source]
-                    .filter(Boolean).join(" · ")));
-      const add = el("button", "btn sm", "Track");
-      add.addEventListener("click", () => busy(add, "…", async () => {
-        await api("/api/jobs/search/add", { roles: [r] });
-        add.textContent = "Tracked"; add.disabled = true;
-        await refresh();
-      }));
-      it.append(el("div", "mono", initial(r.company)), body, add);
+      const t = el("div", "item-t", r.title || "(untitled)");
+      t.appendChild(el("span", "tag " + (st === "tracked" ? "sent"
+        : st === "removed" ? "held" : "new"),
+        st === "tracked" ? "Tracked" : st === "removed" ? "Removed earlier" : "New"));
+      body.append(t, el("div", "item-m",
+        [r.company, r.location, r.source].filter(Boolean).join(" · ")));
+      let act;
+      if (st === "tracked") {
+        act = el("button", "btn sm ghost", "Open");
+        act.addEventListener("click", () => { S.selected = r.key; show("roles"); });
+      } else if (st === "removed") {
+        act = el("button", "btn sm", "Restore");
+        act.title = "You removed this before. Restore it to your roles.";
+        act.addEventListener("click", () => track([r], true, act));
+      } else {
+        act = el("button", "btn sm primary", "Track");
+        act.addEventListener("click", () => track([r], false, act));
+      }
+      it.append(el("div", "mono" + (st === "tracked" ? " done" : ""),
+                   st === "tracked" ? "✓" : initial(r.company)), body, act);
       host.appendChild(it);
     });
-  });
 }
 
 /* --- drafts and claims ------------------------------------------------- */
@@ -614,6 +699,7 @@ LOADERS.drafts = async function () {
 function showDraft(h) {
   const d = $("#draftDetail");
   d.innerHTML = "";
+  enterView(d);
   d.appendChild(el("p", "doc-kicker", "held draft"));
   d.appendChild(el("h1", "doc-title", h.title || "Draft"));
   d.appendChild(el("p", "doc-by", h.company || ""));

@@ -261,12 +261,18 @@ def jobs_search(body: JobsSearchBody | None = None):
 
 
 class JobsAddBody2(BaseModel):
+    # Unknown fields are refused. The window once sent {"roles": [...]} here;
+    # the field is "items", the extra key was quietly dropped, and the call
+    # returned ok with nothing added — every Track click from search looked
+    # like it worked and saved nothing. A wrong name must fail loudly.
+    model_config = {"extra": "forbid"}
     items: list = []
+    restore: bool = False
 
 
 @app.post("/api/jobs/search/add")
 def jobs_search_add(body: JobsAddBody2):
-    return jobscout.add_from_search(body.items)
+    return jobscout.add_from_search(body.items, restore=body.restore)
 
 
 class JobsSearchCfgBody(BaseModel):

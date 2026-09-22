@@ -10,8 +10,6 @@ sources actually produce replies.
 
 *by Symbolic Synapse*
 
-![Agent Jo Jobs](docs/jobs-times.png)
-
 ---
 
 ## What it does

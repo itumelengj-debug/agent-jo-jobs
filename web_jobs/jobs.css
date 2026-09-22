@@ -734,5 +734,48 @@ body { font-size: 13px; }
 .rail-label { font-size: 10.5px; letter-spacing: -0.01em; }
 .rail-build { font-size: 9px; letter-spacing: -0.02em; }
 
-[hidden] { display: none !important; }
+/* search results: state is visible before you act */
+.result-bar { align-items: center; gap: 12px; margin-bottom: 10px; }
+.result-sum { color: var(--ink-3); font-size: 13px; flex: 1 1 auto; }
+.result-sum b { color: var(--ink); }
+.t-new { color: var(--accent); }
+.t-tracked { color: var(--ink-2); }
+.t-removed { color: var(--warn); }
+.tag.new { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.result.is-tracked .item-t, .result.is-tracked .item-m { opacity: .62; }
+.mono.done { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 
+/* === motion — the same curve as Agent Jo, so the two feel like one family */
+:root { --ease-out: cubic-bezier(.2, .8, .2, 1); }
+/* a view eases up as it arrives */
+.view.is-on { animation: jo-rise .26s var(--ease-out) both; }
+/* the role or draft on the right settles in when you pick a different one */
+.pane-detail.view-enter > * { animation: jo-rise .24s var(--ease-out) both; }
+.pane-detail.view-enter > *:nth-child(2) { animation-delay: 30ms; }
+.pane-detail.view-enter > *:nth-child(3) { animation-delay: 60ms; }
+.pane-detail.view-enter > *:nth-child(n+4) { animation-delay: 90ms; }
+/* onboarding steps and pipeline rings arrive one after another */
+.view.is-on .step, .view.is-on .stop, .view.is-on .card {
+  animation: jo-rise .3s var(--ease-out) both;
+}
+.view.is-on .step:nth-child(2), .view.is-on .stop:nth-child(2) { animation-delay: 40ms; }
+.view.is-on .step:nth-child(3), .view.is-on .stop:nth-child(3) { animation-delay: 80ms; }
+.view.is-on .stop:nth-child(4) { animation-delay: 120ms; }
+.view.is-on .stop:nth-child(5) { animation-delay: 160ms; }
+.view.is-on .stop:nth-child(6) { animation-delay: 200ms; }
+/* the rail marker slides between items instead of jumping */
+.nav { transition: background-color .18s ease-out, color .18s ease-out; }
+.item { transition: background-color .15s ease-out; }
+.btn:active { transform: scale(.98); }
+@keyframes jo-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important; animation-delay: 0s !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+[hidden] { display: none !important; }
