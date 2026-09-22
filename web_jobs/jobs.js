@@ -110,14 +110,48 @@ async function refresh() {
   return S.data;
 }
 
+// What a draft leans on. Completeness is the share of these that are filled
+// in — a number that means something, and a tooltip saying what's missing.
+const PROFILE_PARTS = [
+  ["target_roles", "roles you're after"], ["skills", "skills"],
+  ["technologies", "tools"], ["employers", "where you've worked"],
+  ["locations_ok", "where you'd work"], ["summary", "a summary"],
+  ["achievements", "achievements"], ["full_name", "your name"],
+];
+function profileCompleteness(p) {
+  p = p || {};
+  const has = (v) => Array.isArray(v) ? v.length > 0 : !!String(v || "").trim();
+  const missing = PROFILE_PARTS.filter(([k]) => !has(p[k])).map(([, label]) => label);
+  return { pct: Math.round(100 * (PROFILE_PARTS.length - missing.length) / PROFILE_PARTS.length),
+           missing };
+}
+
 function railCounts() {
   const set = (id, n) => { const e = $(id); if (e) e.textContent = n ? n : ""; };
   set("#nRoles", S.roles.length);
   set("#nDrafts", S.roles.filter((r) => r.stage === "held"
                                    || (r.bucket === "held")).length);
   const auto = (S.data || {}).auto || {};
-  set("#nAuto", auto.enabled ? (auto.dry_run ? "rehearse" : "on") : "");
-  set("#nProfile", S.profileReady ? "" : "!");
+  const pill = $("#railAuto");
+  if (pill) {
+    pill.classList.toggle("on", !!auto.enabled);
+    pill.setAttribute("aria-checked", auto.enabled ? "true" : "false");
+    // railCounts runs on nearly every view; a missing piece of the switch
+    // must not take all of them down with it
+    const txt = pill.querySelector(".pt-txt");
+    if (txt) txt.textContent = auto.enabled ? (auto.dry_run ? "Test" : "On") : "Off";
+    pill.title = auto.enabled
+      ? (auto.dry_run ? "Auto-apply is rehearsing — nothing is sent. Click to turn off."
+                      : "Auto-apply is on. Click to turn off.")
+      : "Auto-apply is off. Click to turn on (rules in the Auto-apply view).";
+  }
+  const c = profileCompleteness((S.data || {}).profile);
+  const b = $("#nProfile");
+  if (b) { b.textContent = c.pct + "%"; b.classList.toggle("warn", c.pct < 60); }
+  const f = $("#profileFill");
+  if (f) f.style.width = c.pct + "%";
+  const m = $("#profileMeter");
+  if (m) m.title = c.missing.length ? "Missing: " + c.missing.join(", ") : "Complete";
 }
 
 /* --- overview ---------------------------------------------------------- */
@@ -512,7 +546,10 @@ function openRole(r) {
 }
 
 /* --- search ------------------------------------------------------------ */
-LOADERS.search = function () { $("#q").focus && $("#q").focus(); };
+LOADERS.search = function () {
+  $("#q").focus && $("#q").focus();
+  drawResults();
+};
 
 const SR = { results: [], filter: "all" };
 
@@ -532,6 +569,7 @@ async function runSearch() {
       ? await api("/api/jobs/search/url", { url: q, use_browser: $("#qBrowser").checked })
       : await api("/api/jobs/search", { query: q });
     SR.results = d.results || [];
+    SR.searched = true;
     SR.note = d.note || d.detail || "";
     SR.filter = "all";
     drawResults();
@@ -571,66 +609,89 @@ function drawResults() {
   host.innerHTML = "";
   const all = SR.results;
   if (!all.length) {
-    empty(host, "Nothing found", SR.note || "Try broader words.");
+    empty(host, SR.searched ? "Nothing found" : "Search your sources",
+          SR.searched ? (SR.note || "Try broader words.")
+                      : "Type what you're after above, or paste a posting's address.");
     return;
   }
   const count = { all: all.length, new: 0, tracked: 0, removed: 0 };
   all.forEach((r) => { count[resultState(r)]++; });
 
-  // the summary says what's already yours before you touch anything
-  const bar = el("div", "bar result-bar");
+  const bar = el("div", "result-bar");
   const sum = el("div", "result-sum");
   sum.innerHTML = `<b>${all.length}</b> found · <span class="t-new">${count.new} new</span>`
-    + ` · <span class="t-tracked">${count.tracked} already tracked</span>`
+    + ` · <span class="t-tracked">${count.tracked} tracked</span>`
     + (count.removed ? ` · <span class="t-removed">${count.removed} removed earlier</span>` : "");
   bar.appendChild(sum);
   const chips = el("div", "chips");
-  chips.style.margin = "0";
   [["all", "All"], ["new", "New"], ["tracked", "Tracked"], ["removed", "Removed"]]
     .filter(([k]) => k === "all" || count[k])
     .forEach(([k, label]) => {
-      const c = el("button", "chip" + (SR.filter === k ? " is-on" : ""),
-                   `${label} ${count[k]}`);
+      const c = el("button", "chip" + (SR.filter === k ? " is-on" : ""), `${label} ${count[k]}`);
       c.addEventListener("click", () => { SR.filter = k; drawResults(); });
       chips.appendChild(c);
     });
   bar.appendChild(chips);
   if (count.new) {
     const fresh = all.filter((r) => resultState(r) === "new");
-    const all_ = el("button", "btn primary sm", `Track ${count.new} new`);
-    all_.addEventListener("click", () => track(fresh, false, all_));
-    bar.appendChild(all_);
+    const b = el("button", "btn primary sm", `Track ${count.new} new`);
+    b.addEventListener("click", () => track(fresh, false, b));
+    bar.appendChild(b);
   }
   host.appendChild(bar);
 
-  all.filter((r) => SR.filter === "all" || resultState(r) === SR.filter)
-    .forEach((r) => {
-      const st = resultState(r);
-      const it = el("div", "item static result is-" + st);
-      const body = el("div");
-      const t = el("div", "item-t", r.title || "(untitled)");
-      t.appendChild(el("span", "tag " + (st === "tracked" ? "sent"
-        : st === "removed" ? "held" : "new"),
-        st === "tracked" ? "Tracked" : st === "removed" ? "Removed earlier" : "New"));
-      body.append(t, el("div", "item-m",
-        [r.company, r.location, r.source].filter(Boolean).join(" · ")));
-      let act;
-      if (st === "tracked") {
-        act = el("button", "btn sm ghost", "Open");
-        act.addEventListener("click", () => { S.selected = r.key; show("roles"); });
-      } else if (st === "removed") {
-        act = el("button", "btn sm", "Restore");
-        act.title = "You removed this before. Restore it to your roles.";
-        act.addEventListener("click", () => track([r], true, act));
-      } else {
-        act = el("button", "btn sm primary", "Track");
-        act.addEventListener("click", () => track([r], false, act));
-      }
-      it.append(el("div", "mono" + (st === "tracked" ? " done" : ""),
-                   st === "tracked" ? "✓" : initial(r.company)), body, act);
-      host.appendChild(it);
-    });
+  // a tracked role may already have a fit score; a fresh result never does,
+  // and it says so rather than showing a number nobody computed
+  const fitByKey = {};
+  S.roles.forEach((r) => { if (r.fit && r.fit.score != null) fitByKey[r.key] = r.fit.score; });
+
+  const grid = el("div", "role-grid");
+  all.filter((r) => SR.filter === "all" || resultState(r) === SR.filter).forEach((r) => {
+    const st = resultState(r);
+    const card = el("article", "role-card is-" + st);
+    const head = el("div", "rc-head");
+    const logo = el("div", "rc-logo", initial(r.company));
+    const who = el("div", "rc-who");
+    who.append(el("div", "rc-title", r.title || "(untitled)"),
+               el("div", "rc-co", [r.company, r.location].filter(Boolean).join(" · ")));
+    head.append(logo, who);
+    card.appendChild(head);
+
+    const score = fitByKey[r.key];
+    const line = el("div", "rc-line");
+    const match = el("span", "rc-match" + (score == null ? " none" : score >= 75 ? " hi" : ""),
+                     score == null ? "Not scored" : `${score}% Match`);
+    const tag = el("span", "tag " + (st === "tracked" ? "sent" : st === "removed" ? "held" : "new"),
+                   st === "tracked" ? "Tracked" : st === "removed" ? "Removed earlier" : "New");
+    line.append(match, tag);
+    card.appendChild(line);
+    card.appendChild(el("p", "rc-desc", (r.summary || r.source || "").slice(0, 220)));
+
+    const acts = el("div", "rc-acts");
+    const add = (label, cls, fn) => {
+      const b = el("button", "btn sm" + (cls ? " " + cls : ""), label);
+      b.addEventListener("click", () => fn(b));
+      acts.appendChild(b);
+    };
+    if (st === "new") {
+      add("Track", "primary", (b) => track([r], false, b));
+    } else if (st === "removed") {
+      add("Restore", "", (b) => track([r], true, b));
+    } else {
+      add("Analyze", "primary", (b) => busy(b, "Scoring…", async () => {
+        await api("/api/jobs/score", withEngine({ key: r.key }));
+        await refresh(); drawResults();
+        toast("Scored.");
+      }));
+      add("Open", "", () => { S.selected = r.key; show("roles"); });
+    }
+    if (r.url) add("Posting", "ghost", () => window.open(r.url, "_blank", "noopener"));
+    card.appendChild(acts);
+    grid.appendChild(card);
+  });
+  host.appendChild(grid);
 }
+
 
 /* --- drafts and claims ------------------------------------------------- */
 LOADERS.drafts = async function () {
@@ -782,29 +843,44 @@ LOADERS.sources = async function () {
   catch (e) { empty(host, "Couldn't load", e.message); return; }
   const src = cfg.sources || [];
   $("#nSources").textContent = src.length || "";
+  // freshness is when a search last actually asked the sources
+  $("#srcFresh").textContent = cfg.checked_at
+    ? `Last checked: ${cfg.checked_at}` : "Not checked yet — run a search to check every source.";
   host.innerHTML = "";
-  if (!src.length) empty(host, "No sources yet", "Add one, or let it find some that actually return roles.");
+  if (!src.length) {
+    empty(host, "No sources yet", "Add one, or let it find some that actually return roles.");
+  }
   src.forEach((s) => {
-    const it = el("div", "item static");
-    const body = el("div");
-    body.append(el("div", "item-t", s.name || s.url),
-                el("div", "item-m", s.url || ""));
-    const acts = el("div", "actions");
-    acts.style.margin = "0";
-    const tog = el("button", "btn sm ghost", s.on === false ? "Turn on" : "Pause");
+    const row = el("div", "src-row" + (s.on === false ? " paused" : ""));
+    row.appendChild(el("div", "rc-logo", initial(s.name || s.url)));
+    const who = el("div", "src-who");
+    who.append(el("div", "src-name", s.name || s.url), el("div", "src-url", s.url || ""));
+    row.appendChild(who);
+    const status = s.on === false ? "paused" : (s.status || "pending");
+    const badge = el("span", "badge " + status,
+      { verified: "Verified", pending: "Pending", failing: "Failing", paused: "Paused" }[status]);
+    badge.title = status === "verified" ? `${s.last_count} role(s) on the last check, ${s.checked_at}`
+      : status === "failing" ? (s.error || "Returned nothing on the last check") + (s.checked_at ? ` — ${s.checked_at}` : "")
+      : status === "paused" ? "Skipped by searches until you resume it"
+      : "Not checked yet";
+    row.appendChild(badge);
+    const acts = el("div", "src-acts");
+    const tog = el("button", "btn sm", s.on === false ? "Resume" : "Pause");
     tog.addEventListener("click", () => busy(tog, "…", async () => {
       await api("/api/jobs/sources", { name: s.name, on: s.on === false });
       LOADERS.sources();
     }));
-    const rm = el("button", "btn sm danger", "Remove");
+    const view = el("button", "btn sm", "View");
+    view.title = "Open this source";
+    view.addEventListener("click", () => { if (s.url) window.open(s.url, "_blank", "noopener"); });
+    const rm = el("button", "btn sm ghost danger", "Remove");
     rm.addEventListener("click", () => busy(rm, "…", async () => {
       await api("/api/jobs/sources/remove", { name: s.name, url: s.url });
       LOADERS.sources();
     }));
-    acts.append(tog, rm);
-    it.append(el("div", "mono", initial(s.name || s.url)), body, acts);
-    if (s.on === false) it.style.opacity = ".5";
-    host.appendChild(it);
+    acts.append(tog, view, rm);
+    row.appendChild(acts);
+    host.appendChild(row);
   });
 
   const sug = $("#srcSuggested");
@@ -901,12 +977,12 @@ async function tidy(path, label, body, btn, say) {
 
 /* --- profile ----------------------------------------------------------- */
 const FIELDS = [
-  ["target_roles", "Roles you're after", "Senior Data Engineer, BI Lead"],
-  ["skills", "Skills", "Python, SQL, dbt, data modelling"],
-  ["technologies", "Tools", "Snowflake, Airflow, Power BI"],
-  ["employers", "Where you've worked", "Standard Bank, RMB"],
-  ["locations_ok", "Where you'd work", "Johannesburg, remote"],
+  ["target_roles", "Desired Roles", "Senior Data Engineer, BI Lead"],
+  ["skills", "Core Skills", "Power BI dashboard development, DAX, data modelling"],
+  ["technologies", "Tools", "Power BI, SQL Server, SSIS, Snowflake"],
+  ["locations_ok", "Location Preferences", "Johannesburg, remote"],
 ];
+const TICK = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="m5 8.2 2 2L11 6"/></svg>';
 
 LOADERS.profile = async function () {
   let p = {};
@@ -914,20 +990,59 @@ LOADERS.profile = async function () {
   catch (e) { /* render an empty form */ }
   const f = $("#profileForm");
   f.innerHTML = "";
-  FIELDS.forEach(([k, label, hint]) => {
+  const fieldRow = (key, label, hint, value) => {
     const w = el("div", "field");
-    w.appendChild(el("label", "", label));
+    const l = el("label", "", label);
+    w.appendChild(l);
+    const box = el("div", "field-box");
     const i = el("input", "input");
-    i.id = "p_" + k;
-    i.placeholder = hint;
-    const v = p[k];
-    i.value = Array.isArray(v) ? v.join(", ") : (v || "");
-    w.appendChild(i);
-    f.appendChild(w);
-  });
-  const save = el("button", "btn primary", "Save profile");
+    i.id = "p_" + key; i.placeholder = hint; i.value = value;
+    const t = el("span", "field-tick" + (value.trim() ? " on" : ""));
+    t.innerHTML = TICK;
+    t.title = value.trim() ? "A draft may claim these" : "Empty — nothing here can be claimed";
+    i.addEventListener("input", () => t.classList.toggle("on", !!i.value.trim()));
+    box.append(i, t);
+    w.appendChild(box);
+    return w;
+  };
+  const join = (v) => Array.isArray(v) ? v.join(", ") : (v || "");
+  FIELDS.slice(0, 3).forEach(([k, label, hint]) => f.appendChild(fieldRow(k, label, hint, join(p[k]))));
+
+  // employment history: one card per employer, as in the design
+  const emp = el("div", "field");
+  emp.appendChild(el("label", "", "Employment History"));
+  const cards = el("div", "emp-cards");
+  let employers = Array.isArray(p.employers) ? p.employers.slice() : [];
+  const drawEmp = () => {
+    cards.innerHTML = "";
+    employers.forEach((name, idx) => {
+      const c = el("div", "emp-card");
+      c.append(el("div", "rc-logo", initial(name)), el("div", "emp-name", name));
+      const x = el("button", "emp-x", "×");
+      x.title = "Remove";
+      x.addEventListener("click", () => { employers.splice(idx, 1); drawEmp(); });
+      c.appendChild(x);
+      cards.appendChild(c);
+    });
+    const add = el("input", "input emp-add");
+    add.placeholder = "Add an employer and press Enter";
+    add.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && add.value.trim()) {
+        employers.push(add.value.trim()); drawEmp();
+        const next = cards.querySelector(".emp-add"); if (next) next.focus();
+      }
+    });
+    cards.appendChild(add);
+  };
+  drawEmp();
+  emp.appendChild(cards);
+  f.appendChild(emp);
+
+  f.appendChild(fieldRow("locations_ok", FIELDS[3][1], FIELDS[3][2], join(p.locations_ok)));
+
+  const save = el("button", "btn primary wide", "Save & Synchronize Profile");
   save.addEventListener("click", () => busy(save, "Saving…", async () => {
-    const body = {};
+    const body = { employers };
     FIELDS.forEach(([k]) => {
       body[k] = ($("#p_" + k).value || "").split(",").map((s) => s.trim()).filter(Boolean);
     });
@@ -937,18 +1052,32 @@ LOADERS.profile = async function () {
   }));
   f.appendChild(save);
 
+  // the coverage column: every claim a draft may make, grouped
   const side = $("#profileSide");
   side.innerHTML = "";
-  side.appendChild(el("p", "doc-kicker", "what this allows"));
-  const n = FIELDS.reduce((a, [k]) => a + ((p[k] || []).length || 0), 0);
-  side.appendChild(el("h1", "doc-title", n
-    ? `${n} thing${n === 1 ? "" : "s"} a draft may say about you.`
-    : "Nothing yet — so every draft will be held."));
-  side.appendChild(el("p", "lede",
-    "The claims check reads a draft against this list. Anything a draft says " +
-    "that isn't here — a tool, an employer, a number of years — stops it " +
-    "going out. That's the point: it would rather hold a draft than send one " +
-    "that says something untrue."));
+  const groups = [
+    ["Desired roles", p.target_roles], ["Skills", p.skills], ["Tools", p.technologies],
+    ["Employment history", p.employers], ["Location preferences", p.locations_ok],
+    ["Achievements", p.achievements],
+  ];
+  let total = 0;
+  groups.forEach(([title, items]) => {
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    total += list.length;
+    const g = el("div", "cov-group");
+    const h = el("div", "cov-head");
+    h.append(el("span", "", title), el("span", "cov-n", String(list.length)));
+    g.appendChild(h);
+    if (!list.length) g.appendChild(el("div", "cov-empty", "Nothing yet — a draft can't mention any."));
+    list.slice(0, 12).forEach((x) => g.appendChild(el("div", "cov-item", String(x))));
+    if (list.length > 12) g.appendChild(el("div", "cov-empty", `and ${list.length - 12} more`));
+    side.appendChild(g);
+  });
+  const c = profileCompleteness(p);
+  const foot = el("div", "cov-foot");
+  foot.innerHTML = `<b>${total}</b> claim${total === 1 ? "" : "s"} a draft may make · profile ${c.pct}% complete`
+    + (c.missing.length ? `<br><span class="muted">Missing: ${c.missing.join(", ")}</span>` : "");
+  side.appendChild(foot);
 };
 
 /* --- wiring ------------------------------------------------------------ */
@@ -958,6 +1087,17 @@ async function boot() {
   $("#roleFilter").addEventListener("input", (e) => { S.filter = e.target.value; drawRoleList(); });
   $("#roleSort").addEventListener("change", (e) => { S.sort = e.target.value; drawRoleList(); });
   $$("[data-bulk]").forEach((b) => b.addEventListener("click", () => bulk(b.dataset.bulk, b)));
+
+  const railAuto = $("#railAuto");
+  if (railAuto) railAuto.addEventListener("click", async (e) => {
+    e.stopPropagation();                       // the switch, not the view
+    const on = !((S.data || {}).auto || {}).enabled;
+    try {
+      await api("/api/jobs/auto", { enabled: on });
+      await refresh(); railCounts();
+      toast(on ? "Auto-apply on — rehearsal settings still apply." : "Auto-apply off.");
+    } catch (err) { toast(err.message, "bad"); }
+  });
 
   $("#qGo").addEventListener("click", runSearch);
   $("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });

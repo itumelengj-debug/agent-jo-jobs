@@ -311,8 +311,11 @@ def jobs_search_cfg():
     # quietly fix sources saved without a scheme, so an old mistake doesn't
     # keep failing every run
     fixed = jobscout.repair_sources()
+    st = jobscout.source_status()
+    # sources carry their standing — verified, pending or failing — from
+    # their last real check, and when that was
     return {"repaired": fixed, "search": jobscout.search_config(),
-            "sources": jobscout.job_sources()}
+            "sources": st["sources"], "checked_at": st["checked_at"]}
 
 
 @app.post("/api/jobs/search/config")

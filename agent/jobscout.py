@@ -1367,6 +1367,49 @@ def _fetch_all(query: str = "") -> tuple[list, list, dict]:
     return found, errors, per_source
 
 
+def record_source_checks(per_source: dict, errors: list) -> None:
+    """Keep what each source did the last time it was asked.
+
+    The Sources view marks a board Verified, Pending or Failing. Those words
+    have to come from something that happened — a board is Verified because
+    it returned roles on its last check, not because it's in a list.
+    """
+    try:
+        cfg = load_config()
+        checks = dict(cfg.get("source_checks") or {})
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        why = {}
+        for e in errors or []:
+            name, _, msg = str(e).partition(":")
+            why[name.strip()] = msg.strip()[:200]
+        for name, n in (per_source or {}).items():
+            checks[name] = {"count": int(n or 0), "at": now,
+                            "error": why.get(name, "")}
+        cfg["source_checks"] = checks
+        cfg["sources_checked_at"] = now
+        save_config(cfg)
+    except Exception:
+        pass                                   # a status must never break a search
+
+
+def source_status() -> dict:
+    """Each source's standing, from its last real check."""
+    cfg = load_config()
+    checks = cfg.get("source_checks") or {}
+    out = []
+    for s in job_sources():
+        c = checks.get(s.get("name")) or {}
+        if not c:
+            status = "pending"                 # never asked yet
+        elif c.get("error") or not c.get("count"):
+            status = "failing"
+        else:
+            status = "verified"
+        out.append({**s, "status": status, "last_count": c.get("count"),
+                    "checked_at": c.get("at", ""), "error": c.get("error", "")})
+    return {"sources": out, "checked_at": cfg.get("sources_checked_at", "")}
+
+
 def search(query: str = "", limit: int = 40) -> dict:
     """Look now, without recording anything. A preview matters: adding forty
     roles you didn't want is tedious to undo, and the scoring step that
@@ -1376,6 +1419,7 @@ def search(query: str = "", limit: int = 40) -> dict:
         cfg = {**cfg, "queries": [q.strip() for q in
                                   re.split(r"[,;]| OR ", query) if q.strip()]}
     found, errors, per_source = _fetch_all(query)
+    record_source_checks(per_source, errors)
     results, rejected = [], {}
     for j in found:
         keep, why = matches_search(j, cfg)
