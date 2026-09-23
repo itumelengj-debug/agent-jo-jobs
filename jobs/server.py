@@ -106,6 +106,65 @@ def get_brain():
     return _brain
 
 
+def _run_due_schedules() -> None:
+    """Run this app's own daily job.
+
+    The scheduled run is the whole point of auto-apply, and the standalone
+    Jobs app had no scheduler at all — the job only ever ran if the main
+    Agent Jo app happened to be open at the time. Now either app runs it,
+    and a claim in the shared store means never both.
+    """
+    import time as _t
+    while True:
+        tick_schedules()
+        _t.sleep(30)
+
+
+def tick_schedules() -> dict:
+    """One pass. Separate from the loop so it can be run and checked."""
+    import time as _t
+    ran = []
+    if True:
+        try:
+            mem = get_memory()
+            for s2 in mem.due_schedules(_t.time()):
+                if (s2.get("action") or "") != "jobscout":
+                    continue                   # the main app owns the rest
+                if not mem.claim_schedule(s2["id"], _t.time()):
+                    continue                   # the other app got there first
+                started = _t.time()
+                try:
+                    r = jobscout.auto_cycle(get_brain())
+                    summary = (f"found {r.get('discovered', 0)} new role(s); "
+                               f"{len(r.get('sent') or [])} sent"
+                               + (" (rehearsal)" if r.get("dry_run") else "")
+                               + f", {len(r.get('held') or [])} held")
+                    status = "ok" if r.get("ok") else "error"
+                    if not r.get("ok"):
+                        summary = str(r.get("error", ""))[:300]
+                except EngineNotConfigured as exc:
+                    status, summary = "error", f"{exc.message} {exc.fix}"
+                except Exception as exc:
+                    status, summary = "error", f"{type(exc).__name__}: {exc}"
+                try:
+                    spec = scheduler.parse_spec(s2.get("spec") or "{}")
+                    nxt = scheduler.next_run(spec)
+                except Exception:
+                    nxt = started + 86400
+                mem.schedule_ran(s2["id"], started, nxt, status, summary)
+                ran.append({"id": s2["id"], "status": status,
+                            "summary": summary})
+        except Exception as exc:
+            return {"ran": ran, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ran": ran}
+
+
+def start_scheduler() -> None:
+    import threading
+    t = threading.Thread(target=_run_due_schedules, daemon=True)
+    t.start()
+
+
 @app.exception_handler(EngineNotConfigured)
 async def _no_engine(request: Request, exc: EngineNotConfigured):
     return JSONResponse(status_code=503,
@@ -190,6 +249,13 @@ class JobsCycleBody(BaseModel):
     engine: str = ""
 
 
+@app.get("/api/jobs/auto/readiness")
+def jobs_auto_readiness():
+    """Everything that must be true before an application can leave, and
+    which of them isn't. Nothing here changes anything."""
+    return jobscout.auto_readiness()
+
+
 @app.post("/api/jobs/auto/run")
 def jobs_auto_run(body: JobsCycleBody | None = None):
     # This took no engine at all, so every scoring and drafting call went to
@@ -201,6 +267,20 @@ def jobs_auto_run(body: JobsCycleBody | None = None):
     r = jobscout.auto_apply(get_brain(), model=model)
     if not r.get("ok"):
         raise HTTPException(status_code=400, detail=r["error"][:300])
+    # say what happened in one line. The window read a "summary" key that was
+    # never returned, so every run reported "Ran once." whatever it did.
+    n_sent, n_held = len(r.get("sent") or []), len(r.get("held") or [])
+    n_err = len(r.get("errors") or [])
+    bits = [f"{n_sent} sent" + (" (rehearsal — nothing left this machine)"
+                                if r.get("dry_run") else "")]
+    if n_held:
+        bits.append(f"{n_held} held for you")
+    if n_err:
+        bits.append(f"{n_err} error(s)")
+    r["summary"] = "; ".join(bits)
+    if not n_sent:
+        # a run that sends nothing should say what stopped it
+        r["why_nothing"] = jobscout.auto_readiness()
     return r
 
 

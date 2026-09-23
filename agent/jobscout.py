@@ -560,12 +560,88 @@ def _gate(r: dict, cfg: dict) -> str:
     d = r.get("draft") or {}
     if not d.get("body"):
         return "no draft yet"
+    if d.get("needs_redraft"):
+        # The app marks a draft for rewriting when what it says no longer
+        # matches your profile. The gate never checked, so an unattended run
+        # would have sent exactly the draft the app had flagged.
+        return (d.get("redraft_reason")
+                or "the draft needs rewriting since your profile changed")
     chk = d.get("check") or {}
     if cfg.get("require_clean_check", True) and chk.get("ok") is False:
         n = len(chk.get("problems") or [])
         return (f"draft makes {n} claim(s) I can't source from your profile "
                 f"— needs your eyes")
     return ""
+
+
+def auto_readiness() -> dict:
+    """Everything that has to be true before an application can leave, and
+    which of them isn't.
+
+    The sending code was never broken. It is guarded by half a dozen separate
+    conditions — rehearsal, an email account, observe mode, a scored role, a
+    clean draft, an address on the advert — and when one of them was off,
+    nothing said so: the run reported "0 sent" and looked like a failure. So
+    the conditions are stated in one place, each with what to do about it.
+    """
+    from . import outreach
+    cfg = auto_config()
+    roles_all = roles()
+    ready, why = profile_ready()
+    blockers, notes = [], []
+
+    if not cfg.get("enabled"):
+        blockers.append({"what": "Auto-apply is off",
+                         "fix": "Turn it on — the switch in the sidebar, or here."})
+    if cfg.get("dry_run", True):
+        blockers.append({"what": "Rehearsal is on, so nothing is ever sent",
+                         "fix": "Untick 'Rehearsal' once you've read a few drafts."})
+    if not outreach.is_configured():
+        blockers.append({"what": "No email account is set up",
+                         "fix": "Add your SMTP details in Agent Jo's Outreach "
+                                "panel — without them nothing can be sent."})
+    try:
+        if outreach._is_draft_only():
+            blockers.append({"what": "Observe mode is on across the agent",
+                             "fix": "It forces every send to a rehearsal. Turn "
+                                    "it off in Agent Jo when you're ready."})
+    except Exception:
+        pass
+    if not ready:
+        blockers.append({"what": "Your profile isn't complete enough to draft",
+                         "fix": why})
+
+    # and the roles themselves: a run can only send what clears every gate
+    reasons = {}
+    sendable = 0
+    for r in roles_all:
+        if r.get("stage") == "applied":
+            continue
+        g = _gate(r, cfg)
+        if g:
+            reasons[g] = reasons.get(g, 0) + 1
+        else:
+            sendable += 1
+    room = max(0, int(cfg.get("daily_cap", 5)) - _sent_today())
+    if not roles_all:
+        blockers.append({"what": "No roles are being tracked",
+                         "fix": "Search, or add a source and let it find some."})
+    elif not sendable:
+        top = sorted(reasons.items(), key=lambda kv: -kv[1])[:3]
+        blockers.append({"what": "No tracked role currently clears the gates",
+                         "fix": "; ".join(f"{n} — {w}" for w, n in top)})
+    if sendable and room <= 0:
+        notes.append(f"{sendable} would go, but today's cap of "
+                     f"{cfg.get('daily_cap', 5)} is used up.")
+
+    return {"ok": not blockers,
+            "will_send": (0 if blockers else min(sendable, room)),
+            "sendable": sendable, "room_today": room,
+            "blockers": blockers, "notes": notes,
+            "by_reason": reasons,
+            "summary": ("Ready — the next run would send "
+                        f"{min(sendable, room)} application(s)." if not blockers
+                        else f"{len(blockers)} thing(s) stop anything being sent.")}
 
 
 def auto_apply(brain, model=None, limit: int | None = None) -> dict:
@@ -696,9 +772,14 @@ def set_schedule(memory, scheduler, enabled: bool) -> bool:
         nxt = scheduler.next_run(scheduler.parse_spec(spec))
         new_sid = memory.create_schedule(
             "Job scout — daily",
-            "Search for new remote contracting roles matching my profile, "
-            "score each honestly, and draft applications for strong fits. "
-            "Do not send anything.",
+            # This said "Do not send anything", which was never what the
+            # scheduled run does — it calls auto_cycle, and whether anything
+            # is sent depends on your auto-apply settings. A description that
+            # contradicts the behaviour is worse than none.
+            "Search for new roles matching my profile, score each honestly, "
+            "and draft applications for strong fits. Send only those that "
+            "clear every auto-apply gate — and nothing at all while rehearsal "
+            "is on.",
             spec, "Auto", False, nxt, action="jobscout", payload="{}")
         save_config({**cfg, "schedule_id": new_sid})
         return True
@@ -2340,6 +2421,16 @@ def auto_preview() -> dict:
     for r in roles():
         s = role_state(r, cfg)
         b, title = s["bucket"], s["title"]
+        # The one question that decides a send is the gate the run itself
+        # uses. Classifying by bucket alone let the preview say "nothing
+        # clears the gates" about a role a run would have sent — two answers
+        # to the same question.
+        if not _gate(r, cfg) and s["bucket"] not in ("applied", "closed",
+                                                     "expired", "waiting"):
+            would_send.append({"title": title, "company": r.get("company", ""),
+                               "fit": (r.get("fit") or {}).get("score"),
+                               "to": r.get("apply_email", "")})
+            continue
         if b == "expired":
             expired.append(title)
         elif b in ("closed", "applied", "waiting"):
@@ -2363,7 +2454,23 @@ def auto_preview() -> dict:
                                "fit": s["fit"], "to": s["apply_email"]})
 
     capped = would_send[room:] if room < len(would_send) else []
+    # One sentence saying what would happen. The window read a "sentence" key
+    # that was never returned and fell back to "Auto-apply is off." — which
+    # it then displayed while auto-apply was on.
+    n = len(would_send[:room])
+    if not cfg.get("enabled"):
+        sentence = ("Auto-apply is off. Nothing runs on its own — this is what "
+                    "it would do if you turned it on.")
+    elif cfg.get("dry_run", True) is not False:
+        sentence = (f"Rehearsing: {n} application(s) would be drafted and "
+                    f"nothing would be sent.")
+    elif n:
+        sentence = f"{n} application(s) would be sent on the next run."
+    else:
+        sentence = ("Auto-apply is on, but nothing clears the gates right "
+                    "now — see what's stopping it above.")
     return {
+        "sentence": sentence,
         "enabled": bool(cfg.get("enabled")),
         "dry_run": cfg.get("dry_run", True) is not False,
         "min_score": floor, "daily_cap": cap,

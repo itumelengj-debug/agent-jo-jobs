@@ -794,6 +794,7 @@ function showDraft(h) {
 /* --- auto-apply -------------------------------------------------------- */
 LOADERS.auto = async function () {
   await refresh();
+  drawReadiness();
   const a = (S.data || {}).auto || {};
   $("#aOn").checked = !!a.enabled;
   $("#aDry").checked = a.dry_run !== false;
@@ -804,6 +805,30 @@ LOADERS.auto = async function () {
   $("#aDaily").checked = !!(S.data || {}).daily;
   drawAutoPreview();
 };
+
+// Why nothing will send, stated before you go looking. Auto-apply is guarded
+// by several separate conditions, and when one was off the run just reported
+// "0 sent" — which reads as a broken feature rather than a setting.
+async function drawReadiness() {
+  const host = $("#autoReady");
+  if (!host) return null;
+  host.innerHTML = "";
+  let r;
+  try { r = await api("/api/jobs/auto/readiness"); }
+  catch (e) { return null; }
+  const box = el("div", "ready " + (r.ok ? "is-ok" : "is-blocked"));
+  const head = el("div", "ready-head");
+  head.append(el("span", "ready-dot"), el("span", "ready-sum", r.summary));
+  box.appendChild(head);
+  (r.blockers || []).forEach((b) => {
+    const row = el("div", "ready-row");
+    row.append(el("span", "ready-what", b.what), el("span", "ready-fix", b.fix));
+    box.appendChild(row);
+  });
+  (r.notes || []).forEach((n) => box.appendChild(el("div", "ready-note", n)));
+  host.appendChild(box);
+  return r;
+}
 
 async function drawAutoPreview() {
   const host = $("#autoPreview");
@@ -831,7 +856,7 @@ async function saveAuto(btn) {
       signature: $("#aSig").value,
     });
     toast("Rules saved.");
-    await refresh(); railCounts(); drawAutoPreview();
+    await refresh(); railCounts(); drawAutoPreview(); drawReadiness();
   });
 }
 
@@ -1105,8 +1130,24 @@ async function boot() {
   $("#aSave").addEventListener("click", (e) => saveAuto(e.target));
   $("#aRun").addEventListener("click", (e) => busy(e.target, "Running…", async () => {
     const x = await api("/api/jobs/auto/run", { engine: S.engine });
-    toast(x.summary || x.sentence || "Ran once.");
-    drawAutoPreview();
+    toast(x.summary || "Ran once.", (x.sent || []).length ? "" : "warn");
+    // a run that sent nothing says why, rather than leaving you guessing
+    if (x.why_nothing) await drawReadiness();
+    const held = x.held || [];
+    if (held.length) {
+      const host = $("#autoReady");
+      const box = el("div", "ready is-blocked");
+      box.appendChild(el("div", "ready-head", `${held.length} held this run`));
+      held.slice(0, 6).forEach((hh) => {
+        const row = el("div", "ready-row");
+        row.append(el("span", "ready-what", `${hh.title} — ${hh.company || ""}`),
+                   el("span", "ready-fix", hh.reason));
+        box.appendChild(row);
+      });
+      host.appendChild(box);
+    }
+    (x.errors || []).slice(0, 3).forEach((m) => toast(String(m), "bad"));
+    await refresh(); drawAutoPreview();
   }));
   $("#aPilot").addEventListener("click", (e) => busy(e.target, "Setting up…", async () => {
     const x = await api("/api/jobs/autopilot", {});
