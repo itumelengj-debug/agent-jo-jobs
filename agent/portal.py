@@ -402,9 +402,63 @@ class PlaywrightDriver:
             pass
 
 
+def _explain_portal_error(exc: Exception) -> str:
+    """Say what to do, not what the library printed.
+
+    A portal failure is nearly always one of two set-up steps missing, and
+    both were reported as a wall of Playwright output with the answer buried
+    in it.
+    """
+    s = f"{type(exc).__name__}: {exc}"
+    low = s.lower()
+    if isinstance(exc, ImportError) or "no module named 'playwright'" in low:
+        return ("The browser driver isn't installed. In the app folder run:  "
+                ".venv\\Scripts\\python -m pip install playwright  "
+                "(macOS/Linux: .venv/bin/python -m pip install playwright)")
+    if "executable doesn't exist" in low or "please run the following command" in low:
+        return ("Playwright is installed but its browser isn't. In the app "
+                "folder run:  .venv\\Scripts\\python -m playwright install "
+                "chromium  (macOS/Linux: .venv/bin/python -m playwright "
+                "install chromium)")
+    if "async api" in low:
+        return ("The browser was started from the wrong thread — this is a "
+                "fault in the app, not your setup. Please report it.")
+    if "timeout" in low:
+        return ("The page didn't finish loading in time. The advert may be "
+                "slow, behind a login, or blocking automated browsers.")
+    if "net::" in low or "name_not_resolved" in low:
+        return "Couldn't reach the advert — check the link and your connection."
+    return s[:300]
+
+
 def apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                     headless: bool = False) -> dict:
-    """Open the advert, fill what we can, and either submit or hand over."""
+    """Open the advert, fill what we can, and either submit or hand over.
+
+    Runs the browser off the event loop. Playwright's synchronous API refuses
+    to start on a thread that has a running loop, and reports it as "use the
+    Async API instead" — which reads as a coding mistake in the app rather
+    than a place it was called from. A plain HTTP route is fine (those run on
+    a worker thread), but a tool call inside a chat turn runs on the loop, and
+    every portal application from a conversation failed with that message.
+    """
+    import asyncio as _asyncio
+    try:
+        _asyncio.get_running_loop()
+    except RuntimeError:
+        pass                                   # no loop here: drive it directly
+    else:
+        # a loop is running on this thread — do the work on one without
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        with _TPE(max_workers=1, thread_name_prefix="portal") as _ex:
+            return _ex.submit(_apply_to_portal, role, profile_data,
+                              submit=submit, headless=headless).result()
+    return _apply_to_portal(role, profile_data, submit=submit,
+                            headless=headless)
+
+
+def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
+                     headless: bool = False) -> dict:
     url = str((role or {}).get("url") or "").strip()
     if not url:
         return {"ok": False, "state": FAILED,
@@ -490,8 +544,7 @@ def apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
         log(result)
         return result
     except Exception as exc:
-        result.update({"state": FAILED,
-                       "message": f"{type(exc).__name__}: {exc}"})
+        result.update({"state": FAILED, "message": _explain_portal_error(exc)})
         log(result)
         return result
     finally:
