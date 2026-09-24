@@ -267,6 +267,10 @@ LOADERS.overview = async function () {
     prevBox.appendChild(go);
   } catch (e) { prevBox.appendChild(el("p", "muted", "Couldn't read that.")); }
 
+  drawNeeds(counts, pipe);
+  drawWhereFrom();
+  drawActivity();
+
   const fu = (S.data || {}).follow_ups || [];
   $("#ovFollowCard").hidden = !fu.length;
   const fh = $("#ovFollow");
@@ -281,6 +285,114 @@ LOADERS.overview = async function () {
     fh.appendChild(row);
   });
 };
+
+// The overview used a third of the screen and left the rest empty. These three
+// are built only from what the app already knows — no invented activity.
+function needRow(host, label, n, where, why) {
+  if (!n) return;
+  const b = el("button", "need");
+  b.type = "button";
+  b.append(el("span", "need-n", String(n)),
+           el("span", "need-t", label));
+  if (why) b.appendChild(el("span", "need-why", why));
+  b.addEventListener("click", () => show(where));
+  host.appendChild(b);
+}
+
+function drawNeeds(counts, pipe) {
+  const host = $("#ovNeeds");
+  if (!host) return;
+  host.innerHTML = "";
+  const extra = (pipe || {}).counts || {};
+  const scored = (counts || {}).scored || 0;
+  needRow(host, "held draft(s) claiming too much", extra.held
+    || (counts || {}).held || 0, "drafts", "read and redraft");
+  needRow(host, "need rewriting since your profile changed",
+          extra.needs_redraft || 0, "drafts", "");
+  needRow(host, "scored, not drafted yet", scored, "roles", "draft them");
+  needRow(host, "not scored yet", (counts || {}).found || 0, "roles",
+          "score to rank them");
+  needRow(host, "portal-only — no address to email", extra.no_address || 0,
+          "roles", "apply through the site");
+  if (!S.profileReady) {
+    needRow(host, "your profile is too thin to draft from", 1, "profile",
+            "fill it in");
+  }
+  if (!host.children.length) {
+    host.appendChild(el("p", "muted", "Nothing waiting on you."));
+  }
+}
+
+async function drawWhereFrom() {
+  const host = $("#ovSources");
+  if (!host) return;
+  host.innerHTML = "";
+  const bySource = {};
+  S.roles.forEach((r) => {
+    const s = r.source || "added by hand";
+    bySource[s] = (bySource[s] || 0) + 1;
+  });
+  const rows = Object.entries(bySource).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  if (!rows.length) {
+    host.appendChild(el("p", "muted", "No roles yet."));
+    return;
+  }
+  const top = rows[0][1];
+  rows.forEach(([name, n]) => {
+    const row = el("div", "bar-row");
+    row.appendChild(el("span", "bar-name", name));
+    const track = el("span", "bar-track");
+    const fill = el("span", "bar-fill");
+    fill.style.width = Math.max(6, Math.round((n / top) * 100)) + "%";
+    track.appendChild(fill);
+    row.append(track, el("span", "bar-n", String(n)));
+    host.appendChild(row);
+  });
+  // a source that returned nothing last time is worth knowing about here
+  try {
+    const cfg = await api("/api/jobs/search/config");
+    const bad = (cfg.sources || []).filter((s) => s.status === "failing");
+    if (bad.length) {
+      const p = el("p", "muted");
+      p.textContent = `${bad.length} source(s) returned nothing last check: `
+        + bad.map((s) => s.name).join(", ");
+      host.appendChild(p);
+    }
+  } catch (e) { /* the counts still stand */ }
+}
+
+function drawActivity() {
+  const host = $("#ovActivity");
+  if (!host) return;
+  host.innerHTML = "";
+  const events = [];
+  S.roles.forEach((r) => {
+    (r.events || []).forEach((e) => events.push({
+      at: e.at || "", stage: e.stage || "", note: e.note || "",
+      title: r.title, key: r.key,
+    }));
+  });
+  events.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  if (!events.length) {
+    host.appendChild(el("p", "muted",
+      "Nothing yet. Scoring, drafting and applying all show up here."));
+    return;
+  }
+  const said = {
+    applied: "applied to", drafted: "drafted for", held: "held a draft for",
+    responded: "heard back from", interview: "interview for",
+    offer: "offer from", closed: "closed",
+  };
+  events.slice(0, 6).forEach((e) => {
+    const row = el("button", "act");
+    row.type = "button";
+    row.append(el("span", "act-dot act-" + (e.stage || "")),
+               el("span", "act-t", `${said[e.stage] || e.stage} ${e.title}`),
+               el("span", "act-at", (e.at || "").replace(" UTC", "")));
+    row.addEventListener("click", () => { S.selected = e.key; show("roles"); });
+    host.appendChild(row);
+  });
+}
 
 /* --- roles: list and the role itself ----------------------------------- */
 const CHIPS = [["", "All"], ["email", "Can email"], ["fit", "Fit 75+"],
@@ -357,10 +469,15 @@ function drawRoleList() {
     });
     const body = el("div");
     const t = el("div", "item-t", r.title || "(untitled)");
-    if (r.stage && r.stage !== "found") {
-      t.appendChild(el("span", "tag" + (r.stage === "held" ? " held"
-        : r.stage === "applied" ? " sent" : r.stage === "closed" ? " stop" : ""),
-        r.stage));
+    // the same state the detail shows: the list said "drafted" beside a
+    // detail that said "held", which is one role described two ways
+    const st = r.bucket || r.stage || "found";
+    if (st !== "found") {
+      t.appendChild(el("span", "tag"
+        + (st === "held" || st === "needs_redraft" ? " held"
+           : st === "applied" ? " sent"
+           : st === "closed" || st === "expired" || st === "screened" ? " stop" : ""),
+        st === "needs_redraft" ? "needs rewriting" : st));
     }
     body.append(t, el("div", "item-m",
       [r.company, r.location, r.source].filter(Boolean).join(" · ")));
@@ -401,6 +518,86 @@ async function bulk(action, btn) {
   });
 }
 
+// What the rehearsal worked out, in a form you can paste. Automation gets
+// some way into most forms and stops — an upload it can't reach, a question
+// in a widget — and retyping what the app already worked out is the moment
+// people give up.
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const was = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = was; }, 1200);
+  } catch (e) {
+    // no clipboard permission: select it instead so ctrl-C works
+    const ta = el("textarea", "copy-fallback");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    toast("Press Ctrl+C to copy.", "warn");
+    setTimeout(() => ta.remove(), 8000);
+  }
+}
+
+function showPortal(x, r) {
+  const d = $("#roleDetail");
+  const out = el("div", "out portal-out");
+  const state = x.state || (x.ok ? "filled" : "failed");
+  const head = el("h4", "", {
+    submitted: "Submitted through the portal",
+    filled: "Filled in — check it and press submit yourself",
+    needs_answer: "It needs answers it couldn't work out",
+    unknown_form: "Part of this form is beyond it",
+    blocked: "The site blocked automation",
+    failed: "Couldn't complete the form",
+  }[state] || state);
+  out.appendChild(head);
+  if (x.message) out.appendChild(el("p", "muted", x.message));
+
+  const answers = x.answers || [];
+  if (answers.length) {
+    out.appendChild(el("h5", "portal-h", "Its answers"));
+    answers.forEach((a) => {
+      const row = el("div", "ans ans-" + (a.source || ""));
+      const q = el("div", "ans-q", a.question);
+      const tag = el("span", "tag " + (a.source === "engine" ? "sent"
+        : a.source === "held" ? "held" : ""),
+        a.source === "engine" ? "from your profile"
+          : a.source === "held" ? "held — check this" : "blank");
+      q.appendChild(tag);
+      row.appendChild(q);
+      if (a.answer) {
+        row.appendChild(el("div", "ans-a", a.answer));
+        const c = el("button", "btn sm ghost", "Copy");
+        c.addEventListener("click", () => copyText(a.answer, c));
+        row.appendChild(c);
+      } else {
+        row.appendChild(el("div", "muted", a.why || "you'll need to type this"));
+      }
+      out.appendChild(row);
+    });
+  }
+
+  if (x.paste_pack) {
+    const bar = el("div", "actions");
+    const all = el("button", "btn primary sm", "Copy everything");
+    all.title = "Every field and answer, ready to paste into the form";
+    all.addEventListener("click", () => copyText(x.paste_pack, all));
+    bar.appendChild(all);
+    if (r && r.url) {
+      const open = el("button", "btn sm", "Open the form");
+      open.addEventListener("click", () => window.open(r.url, "_blank", "noopener"));
+      bar.appendChild(open);
+    }
+    out.appendChild(bar);
+    const pre = el("pre", "paste-pack");
+    pre.textContent = x.paste_pack;
+    out.appendChild(pre);
+  }
+  const host = d.querySelector(".portal-out");
+  if (host) host.replaceWith(out); else d.appendChild(out);
+}
+
 function fact(k, v, hi) {
   const w = el("div");
   w.append(el("div", "fact-k", k), el("div", "fact-v" + (hi ? " hi" : ""), v));
@@ -419,9 +616,18 @@ function openRole(r) {
 
   const f = fitOf(r);
   const facts = el("div", "doc-facts");
+  // the bucket, not the raw stage: a role could read "STAGE found" directly
+  // above "scored, not drafted yet", which is the same thing said two ways
+  const BUCKET = {
+    found: "not scored", screened: "screened out", scored: "scored",
+    drafted: "drafted", held: "held", needs_redraft: "needs rewriting",
+    no_address: "portal only", applied: "applied", waiting: "waiting",
+    responded: "replied", interview: "interview", offer: "offer",
+    closed: "closed", expired: "expired",
+  };
   facts.append(
     fact("Fit", f === undefined || f === null ? "not scored" : `${f}`, f >= 75),
-    fact("Stage", r.stage || "found"),
+    fact("Stage", BUCKET[r.bucket] || r.bucket || r.stage || "found"),
     fact("Apply by", r.apply_email ? "email" : "portal"));
   d.appendChild(facts);
   if (r.state_why) d.appendChild(el("p", "muted", r.state_why));
@@ -431,13 +637,16 @@ function openRole(r) {
   // Highlight the next sensible step, not always the first button. "Score
   // it" glowing on a role that's scored and already applied told you to do
   // something you'd done.
+  // keyed on the state, not the raw stage — a held draft was being told to
+  // mark itself applied
   const nextStep = {
-    found: "Score it", scored: "Draft the application",
+    found: "Score it", screened: "Score it", scored: "Draft the application",
     drafted: r.apply_email ? "I applied myself" : "Apply via the portal (rehearse)",
-    held: "Draft the application",
-    applied: "Draft a follow-up", responded: "Interview prep",
-    interview: "Interview prep",
-  }[r.stage || "found"];
+    held: "Draft the application", needs_redraft: "Draft the application",
+    no_address: "Apply via the portal (rehearse)",
+    applied: "Draft a follow-up", waiting: "Draft a follow-up",
+    responded: "Interview prep", interview: "Interview prep",
+  }[r.bucket || r.stage || "found"];
   const group = (title, buttons) => {
     const g = el("div", "actions-group");
     g.appendChild(el("h5", "", title));
@@ -503,14 +712,16 @@ function openRole(r) {
 
   group("Apply", [
     ["Apply via the portal (rehearse)", async (btn) => busy(btn, "Opening…", async () => {
-      const x = await api("/api/jobs/portal", { key: r.key, submit: false });
-      show("Portal rehearsal", x.summary || x.detail || JSON.stringify(x, null, 2));
+      const x = await api("/api/jobs/portal",
+                          withEngine({ key: r.key, submit: false }));
+      showPortal(x, r);
     })],
     ["…and submit", async (btn) => {
       if (!confirm("Submit this application through the portal for real?")) return;
       busy(btn, "Submitting…", async () => {
-        const x = await api("/api/jobs/portal", { key: r.key, submit: true });
-        show("Submitted", x.summary || "Done.");
+        const x = await api("/api/jobs/portal",
+                            withEngine({ key: r.key, submit: true }));
+        showPortal(x, r);
         await refresh(); drawRoleList();
       });
     }, "danger"],
@@ -541,6 +752,42 @@ function openRole(r) {
       });
     }, "danger"],
   ]);
+
+  // what the app already knows about this role, rather than empty space:
+  // why it scored, what the draft says, and what has happened to it
+  const why = (r.fit || {}).why || (r.fit || {}).reason;
+  if (why) {
+    const box = el("div", "out");
+    box.appendChild(el("h4", "", "Why this score"));
+    box.appendChild(el("pre", "", why));
+    d.appendChild(box);
+  }
+  const dr = r.draft || {};
+  if (dr.body) {
+    const box = el("div", "out");
+    const held = (dr.check || {}).ok === false;
+    box.appendChild(el("h4", "", held ? "Draft — held" : (dr.subject || "The draft")));
+    if (held) {
+      const ul = el("ul");
+      ((dr.check || {}).problems || []).forEach((p) =>
+        ul.appendChild(el("li", "", p.detail || String(p))));
+      box.appendChild(ul);
+    }
+    box.appendChild(el("pre", "", dr.body));
+    d.appendChild(box);
+  }
+  const ev = r.events || [];
+  if (ev.length) {
+    const box = el("div", "out");
+    box.appendChild(el("h4", "", "History"));
+    ev.slice().reverse().slice(0, 8).forEach((e) => {
+      const row = el("div", "hist");
+      row.append(el("span", "hist-at", (e.at || "").replace(" UTC", "")),
+                 el("span", "hist-t", e.stage + (e.note ? " — " + e.note : "")));
+      box.appendChild(row);
+    });
+    d.appendChild(box);
+  }
 
   d.appendChild(out);
 }
@@ -802,6 +1049,7 @@ LOADERS.auto = async function () {
   $("#aMin").value = a.min_score ?? 75;
   $("#aCap").value = a.daily_cap ?? 5;
   $("#aSig").value = a.signature || "";
+  $("#aPortal").value = a.portal_mode || "prepare";
   $("#aDaily").checked = !!(S.data || {}).daily;
   drawAutoPreview();
 };
@@ -852,6 +1100,7 @@ async function saveAuto(btn) {
     await api("/api/jobs/auto", {
       enabled: $("#aOn").checked, dry_run: $("#aDry").checked,
       require_clean_check: $("#aClean").checked,
+      portal_mode: $("#aPortal").value,
       min_score: Number($("#aMin").value), daily_cap: Number($("#aCap").value),
       signature: $("#aSig").value,
     });
@@ -929,6 +1178,118 @@ LOADERS.sources = async function () {
     });
   } catch (e) { sug.appendChild(el("p", "muted", "Couldn't load suggestions.")); }
 };
+
+/* --- engines ----------------------------------------------------------- */
+// Adding an engine here writes to the same place Agent Jo reads, so an engine
+// added in either app appears in both. The presets exist because a base URL
+// typed from memory is how a cloud engine ends up pointing at a local runner.
+const ENGINE_PRESETS = [
+  ["DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", true],
+  ["OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", true],
+  ["Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", true],
+  ["Together", "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", true],
+  ["OpenRouter", "https://openrouter.ai/api/v1", "deepseek/deepseek-chat", true],
+  ["Ollama (this machine)", "http://localhost:11434/v1", "qwen3:8b", false],
+  ["LM Studio (this machine)", "http://localhost:1234/v1", "local-model", false],
+];
+
+function engField(id) { return ($("#" + id).value || "").trim(); }
+
+function drawPresets() {
+  const host = $("#engPresets");
+  host.innerHTML = "";
+  ENGINE_PRESETS.forEach(([name, url, model, cloud]) => {
+    const b = el("button", "chip" + (cloud ? "" : " local"), name);
+    b.type = "button";
+    b.title = url;
+    b.addEventListener("click", () => {
+      $("#eName").value = name.split(" (")[0];
+      $("#eUrl").value = url;
+      $("#eModel").value = model;
+      $("#eKey").placeholder = cloud ? "sk-…" : "not needed for a local model";
+      $("#eOut").textContent = "";
+    });
+    host.appendChild(b);
+  });
+}
+
+function engSay(msg, kind) {
+  const out = $("#eOut");
+  out.className = "eng-out " + (kind || "");
+  out.textContent = msg;
+}
+
+LOADERS.engines = async function () {
+  drawPresets();
+  const host = $("#engList");
+  host.innerHTML = "";
+  let list = [];
+  try { list = (await api("/api/engines")).engines || []; }
+  catch (e) { empty(host, "Couldn't load engines", e.message); return; }
+  const mine = list.filter((e) => e.custom);
+  $("#nEngines").textContent = mine.length || "";
+  if (!list.length) empty(host, "No engines yet", "Add one above.");
+  list.forEach((e) => {
+    const row = el("div", "src-row");
+    row.appendChild(el("div", "rc-logo", initial(e.label || e.id)));
+    const who = el("div", "src-who");
+    who.append(el("div", "src-name", e.label || e.id),
+               el("div", "src-url", [e.model, e.base_url].filter(Boolean).join("  ·  ")));
+    row.appendChild(who);
+    // amber is for something wrong; where an engine runs is just a fact
+    const kind = el("span", "badge " + (e.kind === "local" ? "verified" : "paused"));
+    kind.textContent = e.kind === "local" ? "On this machine" : (e.kind || "cloud");
+    kind.title = e.kind === "local"
+      ? "Runs here — costs nothing and nothing leaves the machine"
+      : "A cloud provider — needs a key, and calls leave this machine";
+    row.appendChild(kind);
+    const acts = el("div", "src-acts");
+    if (e.custom) {
+      const test = el("button", "btn sm", "Test");
+      test.addEventListener("click", () => busy(test, "Testing…", async () => {
+        const r = await api("/api/engines/test", { name: e.id, base_url: e.base_url, model: e.model });
+        toast(r.ok ? `${e.id}: ${r.detail}` : `${e.id}: ${r.error} ${r.fix || ""}`,
+              r.ok ? "" : "bad");
+      }));
+      const use = el("button", "btn sm", "Use");
+      use.title = "Score and draft with this engine";
+      use.addEventListener("click", () => {
+        S.engine = e.id;
+        const sel = $("#engine"); if (sel) sel.value = e.id;
+        toast(`Scoring and drafting will use ${e.id}.`);
+      });
+      const rm = el("button", "btn sm ghost danger", "Remove");
+      rm.addEventListener("click", () => {
+        if (!confirm(`Remove the engine "${e.id}"?`)) return;
+        busy(rm, "…", async () => {
+          await api(`/api/engines/${encodeURIComponent(e.id)}`, undefined, "DELETE");
+          LOADERS.engines(); refreshEnginePicker();
+        });
+      });
+      acts.append(test, use, rm);
+    } else {
+      acts.appendChild(el("span", "muted", "built in"));
+    }
+    row.appendChild(acts);
+    host.appendChild(row);
+  });
+};
+
+async function refreshEnginePicker() {
+  try {
+    const m = await api("/api/meta");
+    const sel = $("#engine");
+    if (!sel) return;
+    const was = sel.value;
+    sel.innerHTML = "";
+    ["Auto"].concat(m.engines || []).forEach((n) => {
+      const o = el("option", "", n); o.value = n;
+      sel.appendChild(o);
+    });
+    sel.value = (m.engines || []).includes(was) ? was : (m.default_engine || "Auto");
+    S.engine = sel.value;
+  } catch (e) { /* the picker keeps what it had */ }
+}
 
 /* --- results ----------------------------------------------------------- */
 LOADERS.results = async function () {
@@ -1124,6 +1485,26 @@ async function boot() {
     } catch (err) { toast(err.message, "bad"); }
   });
 
+  $("#eTest").addEventListener("click", (e) => busy(e.target, "Testing…", async () => {
+    const r = await api("/api/engines/test", {
+      base_url: engField("eUrl"), api_key: engField("eKey"), model: engField("eModel"),
+    });
+    engSay(r.ok ? `${r.detail} It replied: "${r.reply}"` : `${r.error} ${r.fix || ""}`,
+           r.ok ? "ok" : "bad");
+  }));
+  $("#eSave").addEventListener("click", (e) => busy(e.target, "Saving…", async () => {
+    const name = engField("eName");
+    if (!name) { engSay("Give the engine a name.", "bad"); return; }
+    const r = await api("/api/engines", {
+      name, base_url: engField("eUrl"), api_key: engField("eKey"),
+      model: engField("eModel"),
+    });
+    // the server warns when the model id and the endpoint disagree — show it
+    engSay(r.message || "Saved.", /looks like/.test(r.message || "") ? "warn" : "ok");
+    $("#eKey").value = "";
+    LOADERS.engines(); refreshEnginePicker();
+  }));
+
   $("#qGo").addEventListener("click", runSearch);
   $("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
 
@@ -1133,6 +1514,22 @@ async function boot() {
     toast(x.summary || "Ran once.", (x.sent || []).length ? "" : "warn");
     // a run that sent nothing says why, rather than leaving you guessing
     if (x.why_nothing) await drawReadiness();
+    const prepared = x.prepared || [];
+    if (prepared.length) {
+      const host = $("#autoReady");
+      const box = el("div", "ready is-ok");
+      box.appendChild(el("div", "ready-head",
+        `${prepared.length} portal form(s) filled — finish them yourself`));
+      prepared.forEach((p) => {
+        const row = el("div", "ready-row");
+        row.append(el("span", "ready-what", `${p.title} — ${p.company || ""}`),
+                   el("span", "ready-fix", p.needs_you && p.needs_you.length
+                      ? "you answer: " + p.needs_you.join("; ")
+                      : `${p.answered} answer(s) filled in`));
+        box.appendChild(row);
+      });
+      host.appendChild(box);
+    }
     const held = x.held || [];
     if (held.length) {
       const host = $("#autoReady");

@@ -12,5 +12,7 @@ python-docx>=1.1
 beautifulsoup4>=4.12
 cryptography>=42.0
 
-# optional — portal applications need a real browser:
-#   pip install playwright && python -m playwright install chromium
+# Portal applications need a real browser. The installer also downloads
+# Chromium for it (about 150 MB) — without that, applying through a company's
+# own form can't work.
+playwright>=1.44

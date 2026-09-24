@@ -497,7 +497,12 @@ AUTO_DEFAULTS = {
                             # nothing, so you can read a week of what it WOULD
                             # have sent before trusting it with your name
     "min_score": 75,        # below this it waits for you
-    "require_clean_check": True,   # a draft with unsourced claims never auto-sends
+    # a draft with unsourced claims never auto-sends
+    "require_clean_check": True,
+    # what to do with adverts that have no email address — most of them.
+    # "prepare" fills the form and answers what it can, and leaves it to you;
+    # "submit" finishes it too; "off" ignores portal-only roles.
+    "portal_mode": "prepare",
     "daily_cap": 5,         # applications are not a numbers game; a cap also
                             # bounds the blast radius of any mistake
     "signature": "",
@@ -657,7 +662,7 @@ def auto_apply(brain, model=None, limit: int | None = None) -> dict:
         return {"ok": False, "error": why}
     from . import outreach
 
-    sent, held, errors = [], [], []
+    sent, held, errors, prepared = [], [], [], []
     cap = int(cfg.get("daily_cap", 5))
     room = max(0, cap - _sent_today())
     todo = [r for r in roles()
@@ -688,6 +693,45 @@ def auto_apply(brain, model=None, limit: int | None = None) -> dict:
 
             reason = _gate(r, cfg)
             if reason:
+                # A role with no address was simply skipped, so auto-apply
+                # only ever worked for email — and most adverts are portals.
+                # It prepares those instead: the form is opened and filled,
+                # the engine answers what it can from your profile, and you
+                # finish it. Submitting on its own stays off unless asked.
+                mode = str(cfg.get("portal_mode", "prepare")).lower()
+                # match the gate's own words, not a guess at them
+                if ("no application email" in reason and mode != "off"
+                        and str(r.get("url") or "").strip()):
+                    try:
+                        from . import portal as _portal
+                        res = _portal.apply_to_portal(
+                            r, profile(), submit=(mode == "submit"),
+                            brain=brain, model=model)
+                    except Exception as exc:
+                        errors.append(f"{r['title']}: portal — "
+                                      f"{type(exc).__name__}: {exc}")
+                        continue
+                    state = res.get("state", "")
+                    update_role(key, portal=res)
+                    if state == "submitted":
+                        room -= 1
+                        set_stage(key, "applied", "submitted via portal")
+                        sent.append({"key": key, "title": r["title"],
+                                     "company": r.get("company", ""),
+                                     "to": "portal", "dry_run": False})
+                    else:
+                        prepared.append({
+                            "key": key, "title": r["title"],
+                            "company": r.get("company", ""),
+                            "state": state,
+                            "answered": len([a for a in (res.get("answers") or [])
+                                             if a.get("source") == "engine"]),
+                            "needs_you": [a["question"] for a
+                                          in (res.get("answers") or [])
+                                          if a.get("source") != "engine"],
+                            "url": r.get("url", ""),
+                            "message": res.get("message", "")})
+                    continue
                 held.append({"key": key, "title": r["title"],
                              "company": r.get("company", ""),
                              "reason": reason})
@@ -731,6 +775,7 @@ def auto_apply(brain, model=None, limit: int | None = None) -> dict:
            f"{len(sent)} sent{' (dry run)' if cfg.get('dry_run') else ''}, "
            f"{len(held)} held, {len(errors)} error(s)")
     return {"ok": True, "sent": sent, "held": held, "errors": errors,
+            "prepared": prepared,
             "common_error": common,
             "dry_run": bool(cfg.get("dry_run", True)),
             "remaining_today": room}

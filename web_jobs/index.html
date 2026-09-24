@@ -32,6 +32,7 @@
       <button class="nav" data-view="auto"><i class="ic"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18h5a4 4 0 0 0 4-4V8.5"/></svg></i><span>Auto-apply</span><span class="pill-toggle" id="railAuto" role="switch" aria-checked="false" title="Auto-apply on/off"><span class="pt-knob"></span><span class="pt-txt">Off</span></span></button>
       <div class="rail-rule"></div>
       <button class="nav" data-view="sources"><i class="ic"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></i><span>Sources</span><b id="nSources"></b></button>
+      <button class="nav" data-view="engines"><i class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 1.5v2.5M15 1.5v2.5M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5"/></svg></i><span>Engines</span><b id="nEngines"></b></button>
       <button class="nav" data-view="results"><i class="ic"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></i><span>Results</span></button>
       <button class="nav" data-view="archive"><i class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/></svg></i><span>Archive</span><b id="nArchive"></b></button>
       <button class="nav" data-view="profile"><i class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></i><span>Your profile</span><b id="nProfile" class="warn"></b></button>
@@ -74,6 +75,21 @@
         <article class="card">
           <h3>The next unattended run</h3>
           <div id="ovPreview"></div>
+        </article>
+      </div>
+
+      <div class="grid-3">
+        <article class="card">
+          <h3>Needs you</h3>
+          <div id="ovNeeds"></div>
+        </article>
+        <article class="card">
+          <h3>Where they came from</h3>
+          <div id="ovSources"></div>
+        </article>
+        <article class="card">
+          <h3>Lately</h3>
+          <div id="ovActivity"></div>
         </article>
       </div>
 
@@ -154,6 +170,12 @@
             <label class="toggle"><input type="checkbox" id="aOn" /><span>Auto-apply on</span></label>
             <label class="toggle"><input type="checkbox" id="aDry" /><span>Rehearsal — draft but never send</span></label>
             <label class="toggle"><input type="checkbox" id="aClean" /><span>Only send drafts that pass the claims check</span></label>
+            <div class="field"><label>Adverts with no email address — most of them</label>
+              <select id="aPortal" class="select">
+                <option value="prepare">Fill the form and answer what it can — you finish it</option>
+                <option value="submit">Fill it and submit it too</option>
+                <option value="off">Skip them</option>
+              </select></div>
             <div class="field"><label>Minimum fit</label><input id="aMin" class="input" type="number" min="0" max="100" /></div>
             <div class="field"><label>Most per day</label><input id="aCap" class="input" type="number" min="0" max="50" /></div>
             <div class="field"><label>Signature</label><textarea id="aSig" class="input" rows="3"></textarea></div>
@@ -222,6 +244,36 @@
     </section>
 
     <!-- RESULTS ----------------------------------------------------------- -->
+    <section class="view" id="v-engines">
+      <header class="page-head stacked">
+        <h1>Engines</h1>
+        <p class="lede">Which model does the scoring and drafting. Add your own
+          provider — a key and a base URL — or point at a model on this machine,
+          which costs nothing and sends nothing out.</p>
+      </header>
+
+      <article class="card">
+        <h3>Add an engine</h3>
+        <div class="form eng-form">
+          <div class="eng-row">
+            <div class="field"><label>Name</label><input id="eName" class="input" placeholder="DeepSeek" /></div>
+            <div class="field"><label>Model</label><input id="eModel" class="input" placeholder="deepseek-chat" /></div>
+          </div>
+          <div class="field"><label>Base URL</label><input id="eUrl" class="input" placeholder="https://api.deepseek.com/v1" /></div>
+          <div class="field"><label>API key <span class="muted">— left blank for a local model</span></label><input id="eKey" class="input" type="password" placeholder="sk-…" /></div>
+          <div class="eng-presets" id="engPresets"></div>
+          <div class="actions">
+            <button class="btn" id="eTest">Test connection</button>
+            <button class="btn primary" id="eSave">Save engine</button>
+          </div>
+          <div id="eOut" class="eng-out"></div>
+        </div>
+      </article>
+
+      <h3 class="eng-h">Your engines</h3>
+      <div class="src-list" id="engList"></div>
+    </section>
+
     <section class="view" id="v-results">
       <header class="hero compact">
         <h1 id="resHead">Results</h1>

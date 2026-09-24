@@ -39,6 +39,27 @@ if errorlevel 1 goto pip_failed
 ".venv\Scripts\python.exe" -c "import jobs.server" >nul 2>&1
 if errorlevel 1 goto wont_load
 
+REM the browser for portal applications. Checked by whether the executable is
+REM actually on disk: "playwright install --dry-run" exits 0 either way, which
+REM once had the installer reporting a browser that wasn't there.
+".venv\Scripts\python.exe" -c "from playwright.sync_api import sync_playwright as s; import pathlib, sys; p=s().start(); e=p.chromium.executable_path; p.stop(); sys.exit(0 if pathlib.Path(e).exists() else 1)" >nul 2>&1
+if not errorlevel 1 goto browser_ok
+echo.
+echo   Downloading the browser for portal applications (about 150 MB)...
+".venv\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 goto browser_failed
+echo   Browser: ready
+goto browser_ok
+
+:browser_failed
+echo.
+echo   The browser didn't download - often a proxy or a blocked network.
+echo   Portal applications will not work until you run:
+echo     .venv\Scripts\python.exe -m playwright install chromium
+echo.
+
+:browser_ok
+
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Agent Jo Jobs.lnk'); $s.TargetPath=(Resolve-Path '.\start.bat').Path; $s.WorkingDirectory=(Resolve-Path '.').Path; $s.IconLocation=(Resolve-Path '.\agent-jo-jobs.ico').Path; $s.Description='Agent Jo Jobs'; $s.Save()" >nul 2>&1
 
 echo.
