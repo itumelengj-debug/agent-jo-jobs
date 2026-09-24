@@ -75,8 +75,17 @@ def main() -> int:
     js_ = (ROOT / "web_jobs" / "jobs.js").read_text("utf-8")
     routes = set(re.findall(r'@app\.(?:get|post|delete)\("(/api/jobs[^"]*)"', srv))
     used = set(re.findall(r'"(/api/jobs[a-z0-9/_-]*)"', js_))
+    # a route with a path parameter is called as a template literal, so match
+    # it by its fixed prefix rather than the literal "{key}"
+    missing = set()
+    for r in routes:
+        if r in used:
+            continue
+        if "{" in r and r.split("{")[0] in js_:
+            continue
+        missing.add(r)
     check("ui.every_user_facing_endpoint_has_a_ui",
-          (routes - used) <= {"/api/jobs/alerts/ingest"}, f"{sorted(routes - used)}")
+          missing <= {"/api/jobs/alerts/ingest"}, f"{sorted(missing)}")
     check("ui.reads_never_carry_a_body", 'verb === "GET" ? { method: "GET" }' in js_)
 
     # --- the icon travels with it ---------------------------------------

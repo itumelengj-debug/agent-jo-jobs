@@ -1122,4 +1122,11 @@ body { font-size: 13px; }
 }
 @media (prefers-reduced-motion: reduce) { .portal-waiting { animation: none; } }
 
+.site-row { padding: 9px 0; border-bottom: 1px solid var(--rule-soft); }
+.site-row:last-child { border-bottom: 0; }
+.site-head { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px; }
+.site-name { font-weight: 650; font-size: 13.5px; }
+.site-steps { font-size: 12.5px; color: var(--accent); margin: 3px 0 2px; }
+
 [hidden] { display: none !important; }
