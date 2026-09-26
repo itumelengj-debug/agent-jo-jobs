@@ -542,11 +542,12 @@ async function copyText(text, btn) {
 // It can stop mid-way and ask for you — a sign-in page, a captcha. The
 // browser is open on this machine, so the useful thing is to say so and wait,
 // then carry on from where it stopped.
-function followPortal(r) {
+function followPortal(r, key) {
   if (S._portalTimer) clearInterval(S._portalTimer);
+  const id = key || r.key;
   const tick = async () => {
     let s;
-    try { s = await api(`/api/jobs/portal/session/${encodeURIComponent(r.key)}`); }
+    try { s = await api(`/api/jobs/portal/session/${encodeURIComponent(id)}`); }
     catch (e) { return; }
     if (s.state === "waiting_for_you") {
       showPortalWaiting(s, r);
@@ -792,6 +793,14 @@ function openRole(r) {
   ]);
 
   group("Apply", [
+    // the companion lives in a window this app opens — it can't appear in
+    // your own browser, which is the usual reason for "I can't see it"
+    ["Open the form with help", async (btn) => busy(btn, "Opening…", async () => {
+      const x = await api("/api/jobs/portal/helper",
+                          withEngine({ key: r.key }));
+      followPortal(r, "help:" + r.key);
+      toast("Opening the form with the helper in it — hover any field.");
+    })],
     ["Apply via the portal (rehearse)", async (btn) => busy(btn, "Opening…", async () => {
       await api("/api/jobs/portal", withEngine({ key: r.key, submit: false }));
       followPortal(r);

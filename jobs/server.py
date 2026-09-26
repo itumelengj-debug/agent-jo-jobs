@@ -341,6 +341,22 @@ def jobs_portal(body: PortalApplyBody):
     return res
 
 
+@app.post("/api/jobs/portal/helper")
+def jobs_portal_helper(body: PortalApplyBody):
+    """Open this role's form with the companion in it. Fills nothing, sends
+    nothing — it is there to help you fill it yourself."""
+    role = jobscout.get_role(body.key)
+    if role is None:
+        raise HTTPException(status_code=404, detail="no such role")
+    if not str(role.get("url") or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="that role has no advert link to open")
+    model, why = _trend_model(getattr(body, "engine", "") or "")
+    return portal.start_helper(role, jobscout.profile(),
+                               brain=(None if why else get_brain_or_none()),
+                               model=(None if why else model))
+
+
 @app.get("/api/jobs/portal/session/{key}")
 def jobs_portal_session(key: str):
     """Where a running application has got to — including waiting for you.

@@ -29,6 +29,7 @@ reason: a wrong application can't be recalled.
 from __future__ import annotations
 
 import json
+import queue
 import re
 import threading
 import time
@@ -872,7 +873,7 @@ def start_sign_in(url: str, label: str = "") -> dict:
                           "title": label or _site_of(url)}
 
     def _run():
-        driver = DRIVER or PlaywrightDriver(headless=False)
+        driver = acquire_driver(headless=False)
         try:
             page = driver.open(normalise_url_safe(url))
             _set_session(key, state=WAITING, blocked_by=NEEDS_LOGIN,
@@ -898,10 +899,10 @@ def start_sign_in(url: str, label: str = "") -> dict:
             _set_session(key, state=FAILED, done=True,
                          message=_explain_portal_error(exc))
         finally:
-            try:
-                driver.close(keep_open=False)
-            except Exception:
-                pass
+            # give the browser back rather than closing it: a fetch or an
+            # application may be using the same one, and closing the profile
+            # from under them is what produced "already in use"
+            release_driver(close=False)
 
     threading.Thread(target=_run, daemon=True, name=f"signin-{key}").start()
     return session(key)
@@ -910,6 +911,64 @@ def start_sign_in(url: str, label: str = "") -> dict:
 def normalise_url_safe(url: str) -> str:
     u = (url or "").strip()
     return u if u.startswith(("http://", "https://")) else "https://" + u
+
+
+def _open_with_help(role: dict, profile_data: dict, key: str,
+                    brain=None, model=None) -> dict:
+    driver = acquire_driver(headless=False)
+    url = normalise_url_safe(str((role or {}).get("url") or ""))
+    try:
+        page = driver.open(url)
+        fields = driver.fields(page)
+        p = plan(role, profile_data, fields)
+        answers = []
+        if p["unknown_required"]:
+            answers = answer_questions(role, profile_data,
+                                       p["unknown_required"], brain, model)
+        hints = companion_hints(p["fill"], answers, fields)
+        ok = _offer_companion(driver, page, hints)
+        _set_session(key, state=FILLED, done=True, url=url,
+                     answers=answers, companion=ok,
+                     paste_pack=paste_pack(answers, p["fill"]),
+                     site=site_brief(url),
+                     message=("The form is open with the helper in it — hover "
+                              "any field to see what to put there. Nothing "
+                              "was filled in or sent."
+                              if ok else
+                              "The form is open. The helper couldn't load in "
+                              "this page, so use the answers below."))
+        remember_site(url, ats=detect_ats(url, driver.html(page)),
+                      state="helper", fields=fields,
+                      questions=p["unknown_required"])
+    except Exception as exc:
+        _set_session(key, state=FAILED, done=True,
+                     message=_explain_portal_error(exc))
+    # the window stays open — you are about to work in it — but the browser
+    # is handed back so nothing else has to launch a second one
+    release_driver(close=False)
+    return session(key)
+
+
+def start_helper(role: dict, profile_data: dict, *, brain=None,
+                 model=None) -> dict:
+    """Open a role's form with the companion in it, and fill in nothing.
+
+    The companion only exists in a window this app opened — it is injected
+    into that page. Browsing a form in your own browser will never show it,
+    which is the commonest reason for "I can't see it". This opens the form
+    the way the app can help with.
+    """
+    key = "help:" + str((role or {}).get("key") or "role")
+    with _sessions_lock:
+        if (_sessions.get(key) or {}).get("state") == RUNNING:
+            return dict(_sessions[key])
+        _sessions[key] = {"state": RUNNING, "at": _iso(), "key": key,
+                          "title": (role or {}).get("title", "")}
+    threading.Thread(
+        target=_open_with_help, daemon=True, name=f"help-{key}",
+        args=(role, profile_data, key), kwargs={"brain": brain,
+                                                "model": model}).start()
+    return session(key)
 
 
 def start_apply(role: dict, profile_data: dict, *, submit: bool = False,
@@ -944,6 +1003,153 @@ def start_apply(role: dict, profile_data: dict, *, submit: bool = False,
     return session(key)
 
 
+class ThreadBoundDriver:
+    """The browser, owned by one thread and driven from any.
+
+    Playwright's synchronous objects belong to the thread that created them —
+    touching them from another gives "cannot switch to a different thread
+    (which happens to have exited)". Sharing one browser across the app was
+    right; sharing it across threads is not. So the browser lives on a thread
+    of its own and every call is posted to it, which keeps one browser and
+    one profile while fetching, applying and the helper each run where they
+    like.
+    """
+
+    def __init__(self, headless: bool = True):
+        self.headless = headless
+        self._real = None
+        self._jobs: "queue.Queue" = queue.Queue()
+        self._thread = threading.Thread(target=self._serve, daemon=True,
+                                        name="browser")
+        self._thread.start()
+
+    def _serve(self) -> None:
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            fn, box = job
+            try:
+                box["value"] = fn()
+            except BaseException as exc:        # noqa: BLE001 — relayed below
+                box["error"] = exc
+            finally:
+                box["done"].set()
+
+    def _call(self, fn, timeout: float = 180.0):
+        if threading.current_thread() is self._thread:
+            return fn()                        # already on the owner thread
+        box = {"done": threading.Event()}
+        self._jobs.put((fn, box))
+        if not box["done"].wait(timeout):
+            raise TimeoutError("the browser didn't answer in time")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+    def _ensure(self):
+        if self._real is None:
+            self._real = PlaywrightDriver(headless=self.headless)
+        return self._real
+
+    # every method the app uses, posted to the owner thread
+    def open(self, url):
+        return self._call(lambda: self._ensure().open(url))
+
+    def fields(self, page):
+        return self._call(lambda: self._ensure().fields(page))
+
+    def html(self, page):
+        return self._call(lambda: self._ensure().html(page))
+
+    def fill(self, page, item):
+        return self._call(lambda: self._ensure().fill(page, item))
+
+    def submit(self, page):
+        return self._call(lambda: self._ensure().submit(page))
+
+    def shot(self, page, name):
+        return self._call(lambda: self._ensure().shot(page, name))
+
+    def companion(self, page, hints):
+        return self._call(lambda: self._ensure().companion(page, hints))
+
+    def close_page(self, page):
+        return self._call(lambda: self._ensure().close_page(page))
+
+    def close(self, keep_open: bool = True):
+        def _shut():
+            if self._real is not None:
+                self._real.close(keep_open=keep_open)
+                if not keep_open:
+                    self._real = None
+        try:
+            self._call(_shut, timeout=60)
+        finally:
+            if not keep_open:
+                self._jobs.put(None)           # let the owner thread finish
+
+    @property
+    def _ctx(self):
+        return getattr(self._real, "_ctx", None)
+
+
+# One browser for the whole application, borrowed and returned.
+#
+# Chromium allows a profile to be open once. Fetching a source, applying to a
+# role and opening a form with help each launched their own against the same
+# profile, so the second was refused — "Opening in existing browser session…
+# the profile is already in use" — and the page it wanted ended up as a blank
+# tab in the first browser. Logins live in that profile, so separate profiles
+# are not an answer: one instance is.
+_SHARED: dict = {"driver": None, "uses": 0, "headless": True}
+_SHARED_LOCK = threading.RLock()
+
+
+def acquire_driver(headless: bool | None = None):
+    """Borrow the browser. Launches it if nobody has it yet."""
+    with _SHARED_LOCK:
+        if DRIVER is not None:
+            return DRIVER                      # a test supplied its own
+        if _SHARED["driver"] is None:
+            _SHARED["driver"] = ThreadBoundDriver(
+                headless=bool(_SHARED["headless"] if headless is None
+                              else headless))
+            _SHARED["uses"] = 0
+        elif headless is False and _SHARED["headless"]:
+            # somebody now needs to see it; the window is already there, so
+            # it stays as it is rather than fighting over the profile
+            pass
+        _SHARED["uses"] += 1
+        return _SHARED["driver"]
+
+
+def release_driver(close: bool = False) -> None:
+    """Give it back. Closes only when nobody else is using it."""
+    with _SHARED_LOCK:
+        if DRIVER is not None:
+            # a supplied driver still hears that the session ended — it owns
+            # its own lifecycle, and silently skipping this left it open
+            try:
+                DRIVER.close(keep_open=not close)
+            except Exception:
+                pass
+            return
+        _SHARED["uses"] = max(0, _SHARED["uses"] - 1)
+        if close and _SHARED["uses"] == 0 and _SHARED["driver"] is not None:
+            try:
+                _SHARED["driver"].close(keep_open=False)
+            except Exception:
+                pass
+            _SHARED["driver"] = None
+
+
+def set_browser_visible(visible: bool) -> None:
+    """Applications need a window you can see; fetching doesn't."""
+    with _SHARED_LOCK:
+        _SHARED["headless"] = not visible
+
+
 def _explain_portal_error(exc: Exception) -> str:
     """Say what to do, not what the library printed.
 
@@ -962,6 +1168,10 @@ def _explain_portal_error(exc: Exception) -> str:
                 "folder run:  .venv\\Scripts\\python -m playwright install "
                 "chromium  (macOS/Linux: .venv/bin/python -m playwright "
                 "install chromium)")
+    if "already in use" in low or "existing browser session" in low:
+        return ("Another browser is already using Agent Jo's profile. Close "
+                "any Chromium window the app opened and try again — if it "
+                "keeps happening, restart the app.")
     if "async api" in low:
         return ("The browser was started from the wrong thread — this is a "
                 "fault in the app, not your setup. Please report it.")
@@ -1018,7 +1228,7 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                             " — portal forms ask for these every time."),
                 "missing": ready["missing"]}
 
-    driver = DRIVER or PlaywrightDriver(headless=headless)
+    driver = acquire_driver(headless=headless)
     result = {"ok": False, "state": FAILED, "url": url,
               "role": role.get("title", "")}
     page = None
@@ -1055,6 +1265,10 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
 
         fields = driver.fields(page)
         result["site"] = site_brief(url)       # what this site took last time
+        # in the page from the start: it was only injected at hand-over, so
+        # it appeared at the end of a session or not at all. If you are ever
+        # looking at this window, it should be there.
+        _offer_companion(driver, page, companion_hints([], [], fields))
         p = plan(role, profile_data, fields)
         result["plan"] = {"fill": len(p["fill"]), "missing": p["missing"],
                           "sensitive": p["sensitive"],
@@ -1183,5 +1397,6 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                                       (NEEDS_LOGIN, NEEDS_CAPTCHA) else ""))
         except Exception:
             pass
-        # keep the window open unless it actually submitted
-        driver.close(keep_open=result.get("state") != SUBMITTED)
+        # hand it back; it closes when nobody else is using it and the
+        # application actually went through
+        release_driver(close=(result.get("state") == SUBMITTED))

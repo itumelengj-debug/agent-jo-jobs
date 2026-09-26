@@ -983,16 +983,17 @@ def open_fetch_batch() -> None:
     """Use one browser for a whole pass over the sources."""
     from . import portal
     if _BATCH.get("driver") is None and portal.DRIVER is None:
-        _BATCH["driver"] = portal.PlaywrightDriver(headless=True)
+        _BATCH["driver"] = portal.acquire_driver(headless=True)
 
 
 def close_fetch_batch() -> None:
+    from . import portal
     d = _BATCH.pop("driver", None)
     if d is not None:
-        try:
-            d.close(keep_open=False)
-        except Exception:
-            pass
+        # returned, not closed: an application or a sign-in may still be in
+        # the same browser, and closing its profile is what made Chromium
+        # refuse the next launch
+        portal.release_driver(close=False)
 
 
 def fetch_with_browser(url: str) -> str:
@@ -1009,7 +1010,7 @@ def fetch_with_browser(url: str) -> str:
     if driver is None:
         driver = _BATCH.get("driver")
     if driver is None:
-        driver = portal.PlaywrightDriver(headless=True)
+        driver = portal.acquire_driver(headless=True)
         ours = True
     page = None
     try:
@@ -1025,10 +1026,7 @@ def fetch_with_browser(url: str) -> str:
         except Exception:
             pass
         if ours:
-            try:
-                driver.close(keep_open=False)
-            except Exception:
-                pass
+            portal.release_driver(close=False)
 
 
 def _explain_fetch_error(err: str, url: str = "") -> str:
@@ -1195,21 +1193,19 @@ def _matches_profile(job: dict, p: dict) -> bool:
 def discover(limit: int = 40) -> dict:
     """Pull fresh roles from the configured boards and record the new ones."""
     p = profile()
-    found, errors, per_source = [], [], {}
-    # one browser for the whole pass, and only if a source actually needs it.
-    # Each fetch used to start its own, so a cycle opened a browser per
-    # source — a screen of blank tabs with one real page among them.
-    if any(s.get("kind") == "browser" and s.get("on", True)
-           for s in job_sources()):
-        open_fetch_batch()
-    for src in job_sources():
-        if not src.get("on", True):
-            continue
-        name = src.get("name", "?")
+    # One pass over the sources, done by one function. This had its own copy
+    # of the loop — which fetched every source over plain HTTP whatever its
+    # kind, so a "browser" source never rendered here, and it left the
+    # browser it opened running. Two loops doing one job is how a fix lands
+    # in the wrong one: the cycle kept its old behaviour after the search
+    # path was fixed.
+    raw, errors, _raw_per = _fetch_all()
+    found, per_source = [], {}
+    by_source = {}
+    for j in raw:
+        by_source.setdefault(j.get("source", "?"), []).append(j)
+    for name, jobs in by_source.items():
         try:
-            parser = _PARSERS.get(src.get("kind", "rss"), _parse_jobs_rss)
-            _CURRENT_SOURCE_URL["url"] = src["url"]
-            jobs = parser(_fetch_source(src["url"]))
             cfg = {**search_config(), "_use_profile_targets": True}
             # search terms, when set, are a deliberate instruction and beat
             # the looser profile guess
@@ -1229,6 +1225,10 @@ def discover(limit: int = 40) -> dict:
         except Exception as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
             per_source[name] = 0
+    # the configured sources are the ones to report on: a role can carry a
+    # source label of its own, which would otherwise appear as a seventh
+    # "source" that nobody added
+    per_source = {name: per_source.get(name, 0) for name in _raw_per}
     found = found[:limit]
     res = add_roles(found)
     emails = sum(1 for j in found if j.get("apply_email"))
