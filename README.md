@@ -73,6 +73,8 @@ python tools/sync_jobs_app.py ../agent-jo-jobs           # copy it across
 
 Two copies of the code that decides whether an application goes out is a
 real cost of being separate. This makes it visible rather than something you
-discover when the two apps disagree.
+discover when the two apps disagree — and this project's own tests fail if a
+copied file no longer matches the manifest, so an edit made here instead of
+in Agent Jo is caught before the next sync quietly undoes it.
 
 Built by **Itumeleng Nthite** — Symbolic Synapse, Johannesburg.

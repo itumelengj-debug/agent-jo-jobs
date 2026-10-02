@@ -19,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["AGENT_HOME"] = tempfile.mkdtemp(prefix="ajj-test-")
+# The server answers only to this machine's own names (agent/localguard.py),
+# and the in-process test client calls itself "testserver".
+os.environ.setdefault("AGENT_ALLOWED_HOSTS", "testserver")
 
 PASSED, FAILED = [], []
 
@@ -52,7 +55,8 @@ def main() -> int:
     c = TestClient(js.app, raise_server_exceptions=False)
     for p in ("/", "/api/meta", "/api/jobs", "/api/jobs/pipeline",
               "/api/jobs/claims", "/api/jobs/outcomes", "/api/jobs/archive",
-              "/api/jobs/auto/preview", "/api/jobs/search/config"):
+              "/api/jobs/auto/preview", "/api/jobs/search/config",
+              "/api/jobs/auto/status"):
         check(f"api.{p}", c.get(p).status_code == 200)
 
     # --- a stranger starts with an empty profile, not the author's -------
@@ -69,6 +73,22 @@ def main() -> int:
     check("flow.a_role_can_be_added_and_read_back",
           [r["title"] for r in c.get("/api/jobs").json()["roles"]]
           == ["Data Engineer"])
+
+    # --- only this app's own page can change anything --------------------
+    # Any web page open in your browser can send requests to this port, and
+    # the app has no password: a form post from another site was enough to
+    # start an auto-apply run.
+    r = c.post("/api/jobs/auto/run", headers={
+        "origin": "https://evil.example", "sec-fetch-site": "cross-site"})
+    check("guard.another_site_cannot_start_auto_apply", r.status_code == 403,
+          f"{r.status_code}")
+    check("guard.a_name_that_isnt_this_machine_is_refused",
+          c.get("/api/meta", headers={"host": "evil.example:8766"}).status_code
+          == 403)
+    check("guard.the_apps_own_page_still_works",
+          c.post("/api/jobs/add", json={"roles": []}, headers={
+              "origin": "http://testserver", "sec-fetch-site": "same-origin"})
+          .status_code == 200)
 
     # --- every user-facing endpoint has a way in --------------------------
     srv = (ROOT / "jobs" / "server.py").read_text("utf-8")
@@ -111,6 +131,21 @@ def main() -> int:
     v = json.loads((ROOT / "VENDORED.json").read_text("utf-8"))
     check("vendored.the_manifest_names_its_source_build",
           bool(v.get("from_build")) and len(v.get("files", {})) >= 10)
+    # ...and every copy still matches it. These are Agent Jo's files, copied
+    # by its sync tool: an edit made here is a fork the next sync silently
+    # undoes, so it fails here instead. Fix it in Agent Jo, then sync.
+    import hashlib
+
+    def _h(p):
+        return hashlib.sha256(
+            p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16]
+    drift = sorted(f for f, h in (v.get("files") or {}).items()
+                   if not (ROOT / f).exists() or _h(ROOT / f) != h)
+    check("vendored.every_copy_still_matches_the_manifest", not drift,
+          f"changed here rather than in Agent Jo: {drift}")
+    check("vendored.the_server_and_window_are_covered_too",
+          {"jobs/server.py", "web_jobs/jobs.js", "run_jobs.py"}
+          <= set(v.get("files") or {}))
 
     # --- the window renders what the server sends -------------------------
     if shutil.which("node"):
