@@ -73,12 +73,35 @@ def _as_list(v) -> list:
 
 
 def _profile_text(p: dict) -> str:
-    """Everything the profile claims, as one searchable blob."""
+    """Everything the profile claims, as one searchable blob — including the
+    CV you pasted, which is yours to claim from too (agent/cvstore.py)."""
     parts = []
     for k, v in (p or {}).items():
+        if k in ("deal_breakers", "must_haves", "voice_notes"):
+            continue                       # what you won't do isn't a claim
         parts.append(str(k))
         parts.extend(_as_list(v))
+    parts.append(_cv_full())
     return " ".join(parts).lower()
+
+
+def _cv_full() -> str:
+    try:
+        from . import cvstore
+        return cvstore.text() or ""
+    except Exception:
+        return ""
+
+
+def _cv_for(role: dict, limit: int = 5000) -> str:
+    """The parts of your CV that answer this advert (BM25), or ""."""
+    try:
+        from . import cvstore
+        q = " ".join(str((role or {}).get(k) or "") for k in
+                     ("title", "summary", "description"))
+        return cvstore.excerpts(q, k=6, limit=limit)
+    except Exception:
+        return ""
 
 
 def requirements(advert: str) -> dict:
@@ -153,7 +176,7 @@ def ats_scan(role: dict, profile: dict) -> dict:
 # --------------------------------------------------------------------------- #
 _TAILOR_SYSTEM = (
     "You prepare a CV for one specific advert.\n"
-    "ABSOLUTE RULE: use ONLY facts present in the PROFILE. You may reorder, "
+    "ABSOLUTE RULE: use ONLY facts present in the PROFILE or the CV (excerpts of the candidate's own CV). You may reorder, "
     "select, re-emphasise and rephrase. You may NOT add a skill, tool, "
     "employer, qualification, metric or year that the profile does not "
     "contain. If the advert asks for something the candidate lacks, leave it "
@@ -172,7 +195,8 @@ def tailor_cv(role: dict, profile: dict, brain, model=None) -> dict:
     payload = json.dumps({"ADVERT": {k: (role or {}).get(k) for k in
                                      ("title", "company", "summary",
                                       "description", "location")},
-                          "PROFILE": profile}, default=str)[:12000]
+                          "PROFILE": profile,
+                          "CV": _cv_for(role)}, default=str)[:16000]
     kw = {"model": model} if model else {}
     try:
         resp = brain.chat([{"role": "user", "content": payload}],
@@ -309,8 +333,8 @@ _INTERVIEW_SYSTEM = (
     "Prepare someone for an interview for this specific advert.\n"
     "Return 6 to 8 questions they are genuinely likely to be asked, drawn "
     "from what the advert emphasises. For each, give the strongest honest "
-    "answer AVAILABLE IN THEIR PROFILE — cite the specific experience they "
-    "would draw on. Where the profile has nothing to draw on, say so plainly "
+    "answer AVAILABLE IN THEIR PROFILE OR CV — cite the specific experience they "
+    "would draw on. Where neither has anything to draw on, say so plainly "
     "in `gap` rather than inventing an answer; that is the question they need "
     "to think about beforehand.\n"
     "Return ONLY raw JSON: {\"questions\": [{\"question\": str, "
@@ -322,7 +346,8 @@ def interview_prep(role: dict, profile: dict, brain, model=None) -> dict:
     payload = json.dumps({"ADVERT": {k: (role or {}).get(k) for k in
                                      ("title", "company", "summary",
                                       "description")},
-                          "PROFILE": profile}, default=str)[:12000]
+                          "PROFILE": profile,
+                          "CV": _cv_for(role)}, default=str)[:16000]
     kw = {"model": model} if model else {}
     try:
         resp = brain.chat([{"role": "user", "content": payload}],

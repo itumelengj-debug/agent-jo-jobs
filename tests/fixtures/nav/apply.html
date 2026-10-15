@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apply · Senior Data Engineer · Acme</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 24px 32px; }
+  iframe { width: 100%; height: 1100px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<!-- The application page: the form itself is in an iframe from another
+     origin, as company sites embed their hiring system's form. Used by
+     tools/check_navigator.py. ?captcha=1 adds a visible captcha;
+     ?badge=1 only the invisible kind's badge, which is not a challenge. -->
+<h1>Apply: Senior Data Engineer</h1>
+<div id="extra"></div>
+<iframe id="appForm" title="Application form"></iframe>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById("appForm").src = (q.get("form") || "") + "/form.html";
+  const extra = document.getElementById("extra");
+  if (q.get("captcha")) {
+    extra.innerHTML = '<div class="g-recaptcha"><iframe title="reCAPTCHA" src="about:blank#recaptcha" width="304" height="78"></iframe></div>';
+  }
+  if (q.get("badge")) {
+    extra.innerHTML = '<div class="grecaptcha-badge" style="position:fixed;right:0;bottom:12px"><iframe title="reCAPTCHA" src="about:blank#recaptcha" width="256" height="60"></iframe></div>';
+  }
+</script>
+</body>
+</html>

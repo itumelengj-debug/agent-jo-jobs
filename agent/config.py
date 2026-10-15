@@ -15,8 +15,11 @@ def _bool(env_var: str, default: bool) -> bool:
 # Identity
 AGENT_NAME = os.environ.get("AGENT_NAME", "Agent Jo")
 
-# Where the agent keeps its brain (database, logs). Survives restarts.
-AGENT_HOME = Path(os.environ.get("AGENT_HOME", str(Path.home() / ".local_agent")))
+# Where the job search keeps its data. Its own folder: it shared Agent Jo's
+# (~/.local_agent) until the two apps were split (CHANGELOG 1), and on the
+# first start agent/migrate.py copies the job data across from there.
+AGENT_HOME = Path(os.environ.get("AGENT_JOBS_HOME") or os.environ.get("AGENT_HOME")
+                  or str(Path.home() / ".agent_jo_jobs"))
 DB_PATH = AGENT_HOME / "agent.db"
 
 # Backend: "anthropic" (Claude API), "ollama" (local model), or "hybrid"
@@ -96,7 +99,7 @@ def deepseek_flash_key():
 # Stamped when this build was packaged. Surfaced in problem reports so
 # "is the fix actually running?" is answerable at a glance — replacing
 # files without restarting the app has burned us more than once.
-BUILD_ID = "2026-10-02 13:02 UTC"
+BUILD_ID = "2026-10-15 12:10 UTC"
 
 MAX_TOKENS = int(os.environ.get("AGENT_MAX_TOKENS", "8192"))
 # Ollama context window (prompt + reply budget). Ollama defaults this to only

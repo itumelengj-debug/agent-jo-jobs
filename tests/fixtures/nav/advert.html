@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior Data Engineer · Acme</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 24px 32px 120px; }
+  nav a { margin-right: 14px; }
+  #cookie-banner { position: fixed; left: 0; right: 0; bottom: 0; background: #f2f2f2;
+    padding: 18px 24px; box-shadow: 0 -2px 8px rgba(0,0,0,.15); z-index: 50; }
+  .cta { display: inline-block; margin: 10px 12px 0 0; padding: 10px 16px; }
+</style>
+</head>
+<body>
+<!-- A job advert that doesn't use the usual words: its way to the form is
+     "Start my journey", which opens the application in a new tab. A cookie
+     banner sits over the page; "Apply with LinkedIn" and "Sign in" are
+     never to be pressed. Used by tools/check_navigator.py. -->
+<div id="cookie-banner" class="cookie-consent" role="dialog" aria-label="Cookies">
+  We use cookies to run this site.
+  <button type="button" id="acceptCookies">Accept all</button>
+  <button type="button" id="rejectCookies">Reject all</button>
+</div>
+<nav><a href="/">Home</a><a href="/jobs">All jobs</a><a href="#" id="signin">Sign in</a></nav>
+<main>
+  <h1>Senior Data Engineer</h1>
+  <p>Acme is hiring a Senior Data Engineer in Johannesburg to build and run our
+     data pipelines. You will work with the analytics team on reporting and
+     data quality.</p>
+  <a class="cta" href="#" id="liApply">Apply with LinkedIn</a>
+  <button class="cta" type="button" id="start">Start my journey</button>
+</main>
+<script>
+  const log = (e) => fetch("/log?e=" + encodeURIComponent(e)).catch(() => {});
+  document.getElementById("acceptCookies").onclick = () => { log("cookies-accepted"); document.getElementById("cookie-banner").remove(); };
+  document.getElementById("rejectCookies").onclick = () => { log("cookies-rejected"); document.getElementById("cookie-banner").remove(); };
+  document.getElementById("liApply").onclick = (ev) => { ev.preventDefault(); log("linkedin"); };
+  document.getElementById("signin").onclick = (ev) => { ev.preventDefault(); log("signin"); };
+  document.getElementById("start").onclick = () => {
+    log("start");
+    window.open("apply.html" + location.search, "_blank");     // the form's address goes along
+  };
+</script>
+</body>
+</html>

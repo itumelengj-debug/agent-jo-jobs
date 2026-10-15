@@ -1129,6 +1129,66 @@ body { font-size: 13px; }
 .site-name { font-weight: 650; font-size: 13.5px; }
 .site-steps { font-size: 12.5px; color: var(--accent); margin: 3px 0 2px; }
 
+/* --- what it did, and what it learned (agent/navigator.py) --------------- */
+.portal-meta { font-size: 12.5px; color: var(--ink-3); margin: 4px 0 2px; }
+.left-list { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.left-list li { margin: 2px 0; }
+details.trail { margin: 12px 0 4px; }
+details.trail > summary {
+  cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--ink-4); font-weight: 600; list-style-position: inside;
+}
+.trail-steps { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.trail-step { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 10px;
+  align-items: baseline; font-size: 13px; color: var(--ink-2); }
+.trail-step.is-off { color: var(--ink-4); }
+.trail-by { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; text-align: center;
+  padding: 2px 6px; border-radius: 999px; color: var(--ink-3); background: rgba(255, 255, 255, .05);
+  white-space: nowrap; }
+.trail-by.by-playbook { color: var(--accent); background: rgba(70, 211, 154, .12); }
+.trail-by.by-engine { color: var(--ink); background: rgba(111, 163, 214, .16); }
+.trail-by.by-saved { color: var(--warn); background: rgba(240, 168, 60, .12); }
+.learned { margin-top: 6px; }
+.learned-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.learned-list li { margin: 3px 0; }
+.learned-list li::marker { color: var(--accent); }
+
+.learn-card { margin-top: 18px; }
+.learn-head p { margin: 4px 0 0; max-width: 78ch; }
+.learn-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+  margin: 16px 0 6px; }
+.learn-stat { padding: 12px 14px; border-radius: var(--r); background: rgba(255, 255, 255, .035);
+  display: grid; gap: 2px; min-width: 0; }
+.learn-stat b { font-size: 22px; font-weight: 700; color: var(--ink); line-height: 1.15; }
+.learn-stat span { font-size: 12.5px; color: var(--ink-2); }
+.learn-stat small { font-size: 11.5px; }
+.learn-sites { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 22px; }
+.learn-site { padding: 10px 0; border-bottom: 1px solid var(--rule-soft); min-width: 0; }
+.learn-site-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.learn-site-head .site-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.learn-site-head .btn { flex: none; }
+.learn-meta { font-size: 12px; color: var(--ink-3); margin: 1px 0 2px; }
+.learn-trend { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.learn-note { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.learn-note::before { content: "Note: "; color: var(--ink-4); }
+.learn-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-top: 14px;
+  padding-top: 12px; border-top: 1px solid var(--rule-soft); }
+.learn-settings .field.inline { display: flex; align-items: center; gap: 10px; margin: 0; }
+.learn-settings .field.inline label { margin: 0; font-size: 13px; color: var(--ink-2); }
+.learn-settings .field.inline .input { width: 84px; }
+
+.finder-card { margin-bottom: 22px; }
+.finder-card .bar { margin-top: 10px; }
+.finder-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--rule-soft); }
+.finder-row:last-child { border-bottom: 0; }
+.finder-row > div { min-width: 0; }
+@media (max-width: 600px) {
+  .finder-row { flex-wrap: wrap; }
+  .trail-step { grid-template-columns: 70px minmax(0, 1fr); }
+}
+
 /* --- use the whole window ----------------------------------------------- */
 /* The views were capped at 1240px, so a wide monitor showed a column of
    content and a dead strip beside it. The cap goes; the grids add columns
@@ -1144,15 +1204,14 @@ body { font-size: 13px; }
 /* on a very wide screen the tail of a page shouldn't float in space */
 .main { min-height: 100%; }
 
-/* --- the new look (152), and the previous one ------------------------- */
-/* Rules under [data-look="new"] are the new look; the sidebar's Look →
-   Previous turns them off and the window is as it was before build 152.
-   Keyboard focus and reduced motion apply to both: they aren't a matter of
-   taste. */
+/* --- fixes that came with the "new" look (152) ------------------------- */
+/* There used to be two looks and a switch. They looked almost the same, so
+   the switch went and these — fixes, not style: contrast, keyboard focus, a
+   narrow window that reflows — now apply always. */
 
 /* The faintest text (counts at zero, conversion notes, placeholders) sat at
    3.3:1 on the page; this lifts it to 4.6:1 and leaves the rest alone. */
-:root[data-look="new"] { --ink-4: #7f8890; }
+:root { --ink-4: #7f8890; }
 
 /* the window had no visible focus at all, so it couldn't be used from the
    keyboard; controls that style their own focus keep it */
@@ -1166,40 +1225,554 @@ body { font-size: 13px; }
    was right; the reference-density rules after it set the rail and the split
    columns unconditionally and undid it. Re-stated here, after them. */
 @media (max-width: 1000px) {
-  [data-look="new"] .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  [data-look="new"] .rail {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .rail {
     flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px;
     height: auto; position: static; border-right: 0;
     border-bottom: 1px solid var(--rule); padding: 10px 12px;
   }
-  [data-look="new"] .rail-brand { padding: 0 8px 0 2px; }
-  [data-look="new"] .rail-nav { flex-direction: row; flex-wrap: wrap; gap: 2px; }
-  [data-look="new"] .rail-rule { display: none; }
-  /* the engine and look pickers stay reachable: at the end of the top bar */
-  [data-look="new"] .rail-foot {
+  .rail-brand { padding: 0 8px 0 2px; }
+  .rail-nav { flex-direction: row; flex-wrap: wrap; gap: 2px; }
+  .rail-rule { display: none; }
+  /* the engine picker stays reachable: at the end of the top bar */
+  .rail-foot {
     display: flex; align-items: center; gap: 6px; margin: 0 0 0 auto; padding: 0;
   }
-  [data-look="new"] .rail-foot .rail-label,
-  [data-look="new"] .rail-foot .rail-build { display: none; }
-  [data-look="new"] .rail-foot .select { width: auto; }
-  [data-look="new"] .view { padding: 22px 18px 36px; }
-  [data-look="new"] .view-split.is-on { grid-template-columns: minmax(0, 1fr); height: auto; }
-  [data-look="new"] .pane-list { border-right: 0; border-bottom: 1px solid var(--rule); }
-  [data-look="new"] .pane-detail { padding: 22px 18px; }
-  [data-look="new"] .grid-2, [data-look="new"] .grid-3, [data-look="new"] .steps { grid-template-columns: minmax(0, 1fr); }
+  .rail-foot .rail-label,
+  .rail-foot .rail-build { display: none; }
+  .rail-foot .select { width: auto; }
+  .view { padding: 22px 18px 36px; }
+  .view-split.is-on { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .pane-list { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .pane-detail { padding: 22px 18px; }
+  .grid-2, .grid-3, .steps { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* both looks: the narrow layout of old hid the sidebar's foot, and the Look
-   switch lives there — it must always be reachable to switch back */
-@media (max-width: 1000px) {
-  :root[data-look="previous"] .rail-foot { display: block; }
-}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important; animation-iteration-count: 1 !important;
     transition-duration: .01ms !important; scroll-behavior: auto !important;
   }
+}
+
+
+/* --- your CV and your answers ------------------------------------------ */
+.cv-card { margin-bottom: 16px; }
+.cv-card h3 { margin: 0 0 4px; }
+.cv-paste { width: 100%; min-height: 140px; resize: vertical; margin: 10px 0;
+  font: 13px/1.5 inherit; box-sizing: border-box; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ans-tools, .ans-add { display: grid; gap: 8px; margin-bottom: 14px; }
+.ans-add { grid-template-columns: minmax(0, 1fr); padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule); }
+.ans-add .btn { justify-self: start; }
+.ans-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px;
+  padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.ans-q { font-weight: 600; }
+.ans-meta { font-size: 12px; color: var(--ink-3); }
+.ans-a { grid-column: 1 / -1; width: 100%; box-sizing: border-box; resize: vertical; }
+.ans-acts { display: flex; gap: 6px; align-items: center; }
+.ans-sens { font-size: 12px; color: var(--warn, #e0b058); display: flex; gap: 4px; align-items: center; }
+
+.ans-open { margin-bottom: 16px; border-color: rgba(245, 196, 107, .45); }
+.ans-open h3 { margin: 0 0 4px; }
+.open-item { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.open-item:last-child { border-bottom: 0; }
+.open-row { display: flex; gap: 8px; }
+.open-row .input { flex: 1; }
+
+/* --- autonomy and run reports ------------------------------------------ */
+.level-card { margin-bottom: 16px; }
+.level-card h3 { margin: 0 0 10px; }
+.level-card .muted { margin: 12px 0 0; }
+.levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1000px) { .levels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.level { text-align: left; padding: 12px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--rule); background: rgba(255,255,255,.02); color: inherit; font: inherit; }
+.level b { display: block; margin-bottom: 4px; }
+.level span { font-size: 12px; color: var(--ink-3); line-height: 1.4; }
+.level.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset;
+  background: rgba(70, 211, 154, .07); }
+.runs-card { grid-column: 1 / -1; }
+.run { border-bottom: 1px solid var(--rule); }
+.run:last-child { border-bottom: 0; }
+.run summary { cursor: pointer; padding: 10px 0; list-style: none; display: grid;
+  grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; }
+.run summary::-webkit-details-marker { display: none; }
+.run-when { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.run-sum { font-size: 13px; }
+.run-body { padding: 0 0 12px; font-size: 13px; display: grid; gap: 8px; }
+.run-body h5 { margin: 4px 0 2px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-3); }
+.run-body ul { margin: 0; padding-left: 18px; }
+
+.inbox-card { margin-top: 16px; }
+.inbox-card h3 { margin: 0 0 4px; }
+.inbox-set { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0 6px; }
+.inbox-set .input { flex: 1 1 220px; max-width: 320px; }
+.rep { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.rep:last-child { border-bottom: 0; }
+.rep-kind { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--rule); align-self: start; }
+.rep-kind.interview, .rep-kind.offer { color: #46d39a; border-color: rgba(70,211,154,.5); }
+.rep-kind.rejection { color: var(--ink-3); }
+.rep-when { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+
+.digest-card { margin-top: 16px; }
+.digest-card h3 { margin: 0 0 4px; }
+.digest-card .select { width: auto; }
+.digest-preview { white-space: pre-wrap; font: 12.5px/1.55 ui-monospace, Consolas, monospace;
+  background: rgba(0,0,0,.25); border: 1px solid var(--rule); border-radius: 10px;
+  padding: 14px; margin: 10px 0 0; max-height: 420px; overflow: auto; }
+
+.update-card { margin-top: 18px; }
+.update-card h3 { margin: 0 0 4px; }
+.update-card .input { max-width: 420px; }
+
+.prep-q { border-top: 1px solid var(--line, rgba(127,127,127,.2)); padding: 6px 0; }
+.prep-q summary { cursor: pointer; font-weight: 600; }
+.prep-q p { margin: 6px 0 0 14px; }
+.prep-gap { color: var(--warn, #b7791f); }
+
+/* practice interview */
+.mock-wrap { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(0,0,0,.45); backdrop-filter: blur(6px); padding: 16px; }
+.mock { width: min(720px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 16px;
+  padding: 20px 22px; box-shadow: 0 30px 80px rgba(0,0,0,.45); }
+.mock-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 10px; }
+.mock-head h3 { margin: 0; }
+.mock-bar { height: 4px; border-radius: 4px; background: var(--paper-3); margin: 6px 0 14px; overflow: hidden; }
+.mock-bar i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.mock-q { font-size: 1.25rem; line-height: 1.4; margin: 6px 0 14px; color: var(--ink); }
+.mock-q.small { font-size: 1rem; color: var(--ink-2); }
+.mock-a { width: 100%; min-height: 170px; resize: vertical; box-sizing: border-box; }
+.mock-meta { margin: 4px 0 10px; font-size: .85rem; }
+.mock-opt { display: block; margin: 10px 0; }
+.mock-score { display: inline-block; font: 600 1.4rem var(--sans); padding: 4px 12px; border-radius: 10px;
+  background: var(--paper-3); margin: 4px 0 8px; }
+.mock-score.big { font-size: 2.2rem; }
+.mock-score.s4, .mock-score.s5 { color: var(--accent); }
+.mock-score.s3 { color: var(--warn); }
+.mock-score.s1, .mock-score.s2 { color: var(--stop); }
+.mock-fix { color: var(--ink); font-weight: 600; }
+.mock-checks { list-style: none; padding: 0; margin: 8px 0; }
+.mock-checks li { margin: 3px 0; }
+.mock-checks .ok { color: var(--ok); }
+.mock-checks .no { color: var(--ink-2); }
+.claim { color: var(--warn); }
+.mock-better { margin: 10px 0; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 10px; }
+.mock-better summary { cursor: pointer; font-weight: 600; }
+
+.draft-edit { width: 100%; min-height: 260px; margin-top: 8px; box-sizing: border-box; resize: vertical;
+  font: inherit; line-height: 1.5; }
+.style-rule { grid-template-columns: auto 1fr auto; align-items: center; }
+.style-rule .item-t { white-space: normal; }
+
+.phone-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
+.phone-link { max-width: 260px; }
+.phone-qr svg { width: 200px; height: 200px; border-radius: 8px; display: block; margin-bottom: 8px; }
+
+.person { grid-template-columns: auto 1fr auto; align-items: center; }
+.person .actions { flex-wrap: wrap; justify-content: flex-end; }
+.person-notes { font-style: italic; }
+.know-box { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.know-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.know-row p { margin: 4px 0; }
+
+.resume-pick { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.resume-pick > p { flex-basis: 100%; margin: 0 0 4px; }
+.resume-field { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+
+.quality { margin: 6px 0 10px; padding: 8px 12px; border-radius: 10px; background: var(--paper-3); }
+.quality ul { margin: 6px 0 0 16px; padding: 0; }
+.quality.q-strong b { color: var(--accent); }
+.quality.q-fair b { color: var(--warn); }
+.quality.q-weak b { color: var(--stop); }
+
+.email-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.ready-row .btn { margin-left: 8px; }
+
+.backup-link { display: block; margin-top: 6px; }
+
+/* On a phone-width window the overview's three buttons ran off the right
+   edge: the row doesn't wrap (so the helper text gives way on a laptop), and
+   below 600px there's no room for all three. There they wrap. */
+@media (max-width: 600px) {
+  #ovActions { flex-wrap: wrap; }
+  #ovActions .muted { flex-basis: 100%; white-space: normal; }
+}
+
+/* ======================================================================= */
+/*  SYMBOLIC SYNAPSE, IN JOBS GREEN — the look of symbolicsynapse.co.za     */
+/*  (and of Agent Jo), with Jobs' own mint where the site has cyan, so the  */
+/*  two apps are one family and still easy to tell apart. The abyss ground */
+/*  and its grain, Archivo / IBM Plex, pill buttons, frosted cards, and the */
+/*  lattice on the overview with the green Jobs logo at its heart.         */
+/*  Scoped to html[data-skin="synapse"] (set in index.html). It changes    */
+/*  colour, type and texture; layout stays with the rules above, so the    */
+/*  narrow-window fixes still apply.                                        */
+/* ======================================================================= */
+
+/* the site's typefaces, served from this app (web_jobs/fonts): no font
+   service is contacted, so it works offline */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo-var.woff") format("woff");
+  font-weight: 400 800; font-stretch: 100% 125%; font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("fonts/ibm-plex-sans-var.woff") format("woff");
+  font-weight: 100 700; font-stretch: 75% 100%; font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/ibm-plex-mono-400.woff") format("woff");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/ibm-plex-mono-500.woff") format("woff");
+  font-weight: 500 700; font-style: normal; font-display: swap;
+}
+
+/* only this look draws the lattice */
+.syn-mark { display: none; }
+
+html[data-skin="synapse"] {
+  color-scheme: dark;
+  /* the site's palette, by its own names */
+  --syn-abyss: #03060B;
+  --syn-void: #070B12;
+  --syn-panel: #0C1522;
+  --syn-edge: #1C2C40;
+  --syn-edge-2: #27405C;
+  --syn-steel: #2E6FAE;
+  --syn-steel-hi: #6FA3D6;
+  --syn-bolt: #E6FAFF;
+  --syn-fog: #D8E5F2;
+  --syn-slate: #8A9DB3;
+  --syn-ice: #9DBEDF;            /* the wordmark's first word */
+  --syn-mint-hi: #8ff0c4;        /* Jobs' accent, lit: a hovered button */
+  --syn-field: rgba(12, 21, 34, .7);
+  --syn-field-edge: rgba(39, 64, 92, .55);
+  --syn-card: rgba(11, 19, 31, .55);
+  --syn-ease: cubic-bezier(.2, .7, .3, 1);
+
+  /* Jobs' tokens on it — the green accent stays Jobs' own */
+  --paper: #03060B;
+  --paper-2: rgba(12, 21, 34, .62);
+  --paper-3: rgba(18, 32, 52, .6);
+  --paper-4: rgba(28, 44, 64, .62);
+  --rule: rgba(39, 64, 92, .5);
+  --rule-soft: rgba(39, 64, 92, .3);
+  --ink: #D8E5F2;
+  --ink-2: #B4C4D6;
+  --ink-3: #8A9DB3;
+  --ink-4: #7A8DA3;
+  --accent: #46d39a;
+  --accent-ink: #04200f;
+  --r: 12px;
+  --r-lg: 20px;
+  --display: "Archivo", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --serif: "Archivo", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --sans: "IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI", system-ui,
+          -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+html[data-skin="synapse"] body { background: #03060B; }
+html[data-skin="synapse"] select { font-family: inherit; }
+html[data-skin="synapse"] ::selection { background: rgba(70, 211, 154, .28); }
+
+/* --- ground: the abyss, a steel glow, a green one, and the grain -------- */
+html[data-skin="synapse"] .backdrop {
+  filter: none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.075'/%3E%3C/svg%3E"),
+    radial-gradient(900px 620px at 84% -8%, rgba(46, 111, 174, .20), transparent 70%),
+    radial-gradient(760px 560px at 6% 104%, rgba(47, 174, 123, .14), transparent 70%),
+    radial-gradient(1100px 760px at 50% 38%, #070B12, #03060B 78%);
+}
+
+/* --- the rail: the site's masthead glass, and its wordmark -------------- */
+html[data-skin="synapse"] .rail {
+  background: rgba(3, 6, 11, .66);
+  backdrop-filter: blur(16px) saturate(1.2);
+  border-right-color: rgba(28, 44, 64, .85);
+  border-bottom-color: rgba(28, 44, 64, .85);
+}
+/* the logo is round with its own green ring: no frame round it */
+html[data-skin="synapse"] .avatar { border-radius: 0; box-shadow: none; }
+html[data-skin="synapse"] .rail-title {
+  font-family: var(--display); font-weight: 700; font-stretch: 112%;
+  font-size: 16.5px; letter-spacing: -.02em; color: var(--syn-fog);
+}
+html[data-skin="synapse"] .rail-title em { font-style: normal; color: var(--accent); }
+html[data-skin="synapse"] .rail-sub {
+  margin-top: 4px; white-space: nowrap; font-family: var(--display);
+  font-size: 9px; line-height: 1; text-transform: uppercase; color: var(--ink-4);
+}
+html[data-skin="synapse"] .rail-sub .rs-by { text-transform: none; font-size: 10px; letter-spacing: 0; }
+html[data-skin="synapse"] .rail-sub .rs-a { font-weight: 800; letter-spacing: .15em; color: var(--syn-ice); }
+html[data-skin="synapse"] .rail-sub .rs-b {
+  font-weight: 600; letter-spacing: .21em; color: var(--accent); margin-left: .25em;
+}
+html[data-skin="synapse"] .nav { color: var(--syn-slate); }
+html[data-skin="synapse"] .nav .ic { color: var(--syn-steel-hi); }
+html[data-skin="synapse"] .nav:hover { background: rgba(18, 32, 52, .7); color: var(--syn-fog); }
+html[data-skin="synapse"] .nav:hover .ic { color: var(--accent); }
+/* where you are: the site's current-page item, in green */
+html[data-skin="synapse"] .nav.is-on { background: rgba(70, 211, 154, .1); color: var(--accent); }
+html[data-skin="synapse"] .nav.is-on .ic { color: var(--accent); }
+html[data-skin="synapse"] .nav b { font-family: var(--mono); color: var(--ink-4); }
+html[data-skin="synapse"] .nav b.warn:not(:empty) { color: #f3c46d; }
+html[data-skin="synapse"] .rail-rule { background: rgba(28, 44, 64, .8); }
+html[data-skin="synapse"] .profile-meter { background: rgba(39, 64, 92, .4); }
+html[data-skin="synapse"] .pm-fill { background: linear-gradient(90deg, var(--syn-steel), var(--accent)); }
+html[data-skin="synapse"] .rail-foot {
+  background: var(--syn-card); border-color: rgba(28, 44, 64, .75); border-radius: 16px;
+}
+html[data-skin="synapse"] .rail-build { font-family: var(--mono); }
+
+/* --- headlines: Archivo, wide and tight, as on the site ----------------- */
+html[data-skin="synapse"] .eyebrow,
+html[data-skin="synapse"] .doc-kicker,
+html[data-skin="synapse"] .portal-h,
+html[data-skin="synapse"] .actions-group h5 {
+  font-family: var(--mono); font-weight: 500; letter-spacing: .14em; color: var(--syn-ice);
+}
+html[data-skin="synapse"] .hero h1,
+html[data-skin="synapse"] .page-head h1 {
+  font-family: var(--display); font-weight: 600; font-stretch: 112%;
+  font-size: clamp(30px, 3.1vw, 44px); line-height: 1.04; letter-spacing: -.04em;
+  color: #F1F8FE;
+}
+/* a page's own title (beside its tools, or above a form): a step smaller
+   than the overview's headline */
+html[data-skin="synapse"] .page-head h1,
+html[data-skin="synapse"] .hero.compact h1 {
+  font-size: clamp(26px, 2.5vw, 36px); font-stretch: 108%; letter-spacing: -.03em;
+}
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  html[data-skin="synapse"] .hero h1,
+  html[data-skin="synapse"] .page-head h1 {
+    background: linear-gradient(180deg, #F1F8FE 30%, rgba(216, 229, 242, .74) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+}
+html[data-skin="synapse"] .card h3,
+html[data-skin="synapse"] .out h4,
+html[data-skin="synapse"] .step h4,
+html[data-skin="synapse"] .pane-intro h2,
+html[data-skin="synapse"] .side-title,
+html[data-skin="synapse"] .eng-h,
+html[data-skin="synapse"] .doc-title,
+html[data-skin="synapse"] .finding-t,
+html[data-skin="synapse"] .empty b,
+html[data-skin="synapse"] .placeholder b {
+  font-family: var(--display); font-weight: 600; font-stretch: 106%; letter-spacing: -.015em;
+}
+html[data-skin="synapse"] .doc-title { font-stretch: 110%; letter-spacing: -.03em; }
+html[data-skin="synapse"] .lede { color: var(--syn-slate); }
+/* numbers: the site's facts */
+html[data-skin="synapse"] .fact-v,
+html[data-skin="synapse"] .stop-n,
+html[data-skin="synapse"] .need-n,
+html[data-skin="synapse"] .rc-match,
+html[data-skin="synapse"] .mock-score {
+  font-family: var(--display); font-weight: 700; font-stretch: 108%;
+  letter-spacing: -.01em; font-variant-numeric: tabular-nums;
+}
+html[data-skin="synapse"] .rc-match.none { font-family: var(--sans); font-weight: 500; }
+html[data-skin="synapse"] .fact-k,
+html[data-skin="synapse"] .stop-label {
+  font-family: var(--mono); font-weight: 500; letter-spacing: .12em;
+}
+
+/* --- the overview: Jobs' logo inside the lattice, beside the headline --- */
+html[data-skin="synapse"] #v-overview .hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 400px);
+  column-gap: 28px; align-items: center; max-width: none;
+}
+html[data-skin="synapse"] #v-overview .hero-copy { min-width: 0; max-width: 72ch; }
+html[data-skin="synapse"] .syn-mark {
+  display: grid; place-items: center; position: relative; isolation: isolate;
+  height: 150px;
+  --syn-halo: 24px;                     /* how far the lattice reaches past the logo */
+}
+html[data-skin="synapse"] .syn-mark img {
+  width: 64px; height: 64px; display: block;
+  filter: drop-shadow(0 18px 40px rgba(19, 120, 100, .45));
+}
+html[data-skin="synapse"] .syn-mark canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none;
+}
+@media (max-width: 1000px) {
+  html[data-skin="synapse"] #v-overview .hero { display: block; }
+  html[data-skin="synapse"] .syn-mark { display: none; }
+}
+
+/* --- the pipeline: rings in steel, green where work moved, amber where stuck */
+html[data-skin="synapse"] .ring { border-color: var(--syn-edge-2); }
+html[data-skin="synapse"] .ring::after { background: var(--syn-edge-2); }
+html[data-skin="synapse"] .stop.lit .ring {
+  border-color: var(--accent); box-shadow: 0 0 18px -4px rgba(70, 211, 154, .55);
+}
+html[data-skin="synapse"] .stop.lit .ring::after { background: var(--accent); }
+html[data-skin="synapse"] .stop.blocked .ring {
+  border-color: var(--warn); box-shadow: 0 0 18px -4px rgba(240, 168, 60, .55);
+}
+html[data-skin="synapse"] .stop.blocked .ring::after { background: var(--warn); }
+
+/* --- cards: the site's frosted panels ----------------------------------- */
+html[data-skin="synapse"] .card,
+html[data-skin="synapse"] .out,
+html[data-skin="synapse"] .step,
+html[data-skin="synapse"] .role-card,
+html[data-skin="synapse"] .src-list {
+  border-radius: 20px;
+  background: linear-gradient(160deg, rgba(18, 32, 52, .62), rgba(8, 14, 24, .5));
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(230, 250, 255, .04), 0 14px 30px -22px rgba(0, 0, 0, .9);
+}
+html[data-skin="synapse"] .ready { border-radius: 20px; }
+html[data-skin="synapse"] .pane-list { background: rgba(3, 6, 11, .45); }
+html[data-skin="synapse"] .role-card:hover { border-color: rgba(70, 211, 154, .35); }
+html[data-skin="synapse"] .step-num { color: var(--syn-ice); }
+html[data-skin="synapse"] .step.done .step-num { color: var(--accent); }
+html[data-skin="synapse"] .level { background: rgba(11, 19, 31, .55); border-radius: 16px; }
+html[data-skin="synapse"] .level.is-on { background: rgba(70, 211, 154, .08); }
+
+/* --- lists ---------------------------------------------------------------- */
+html[data-skin="synapse"] .item:hover,
+html[data-skin="synapse"] .need:hover,
+html[data-skin="synapse"] .act:hover { background: rgba(18, 32, 52, .7); }
+html[data-skin="synapse"] .item.is-on { background: rgba(70, 211, 154, .1); }
+html[data-skin="synapse"] .item.is-on .item-t { color: var(--accent); }
+html[data-skin="synapse"] .mono {
+  background: rgba(28, 44, 64, .8); color: var(--syn-ice); font-family: var(--display);
+}
+html[data-skin="synapse"] .mono.ticked { background: var(--accent); color: var(--accent-ink); }
+html[data-skin="synapse"] .mono.done { background: rgba(70, 211, 154, .2); color: var(--accent); }
+html[data-skin="synapse"] .rc-logo {
+  border-radius: 12px; background: linear-gradient(145deg, rgba(111, 163, 214, .18), rgba(18, 32, 52, .5));
+}
+html[data-skin="synapse"] .src-row:hover { background: rgba(18, 32, 52, .55); }
+html[data-skin="synapse"] .fit,
+html[data-skin="synapse"] .bar-n,
+html[data-skin="synapse"] .hist-at { font-family: var(--mono); }
+html[data-skin="synapse"] .bar-track { background: rgba(39, 64, 92, .4); }
+html[data-skin="synapse"] .bar-fill { background: linear-gradient(90deg, var(--syn-steel), var(--accent)); }
+
+/* --- controls: the site's pills, solid green or a line ------------------- */
+html[data-skin="synapse"] .btn {
+  border-radius: 999px; background: rgba(12, 21, 34, .35);
+  border-color: var(--syn-edge-2); color: var(--syn-fog);
+}
+html[data-skin="synapse"] .btn:hover:not(:disabled) {
+  background: rgba(70, 211, 154, .06); border-color: var(--accent); color: var(--accent);
+}
+html[data-skin="synapse"] .btn.ghost { background: transparent; color: var(--syn-slate); }
+html[data-skin="synapse"] .btn.danger:hover:not(:disabled) {
+  background: rgba(236, 107, 94, .08); border-color: var(--stop); color: var(--stop);
+}
+/* the primary: solid green with dark ink, as the site's solid button is cyan.
+   The light sweeping across on hover, and looping while it works, stays */
+html[data-skin="synapse"] .btn.primary {
+  background: var(--accent); border: 1px solid var(--accent); color: var(--accent-ink);
+  font-weight: 600; text-shadow: none;
+  box-shadow: 0 10px 24px -14px rgba(70, 211, 154, .85);
+}
+html[data-skin="synapse"] .btn.primary:hover:not(:disabled) {
+  background: var(--syn-mint-hi); border-color: var(--syn-mint-hi); color: var(--accent-ink);
+  transform: translateY(-1px);
+}
+html[data-skin="synapse"] .btn.primary:active { box-shadow: 0 4px 12px -8px rgba(70, 211, 154, .8); }
+html[data-skin="synapse"] .step .btn.primary { box-shadow: none; }
+html[data-skin="synapse"] .btn.is-busy:not(.primary) {
+  background: linear-gradient(180deg, rgba(28, 44, 64, .75), rgba(12, 21, 34, .75));
+  border-color: rgba(70, 211, 154, .35); color: var(--syn-fog);
+}
+@keyframes syn-breathe {
+  0%, 100% { box-shadow: 0 0 12px -2px rgba(70, 211, 154, .35); }
+  50% { box-shadow: 0 0 28px 0 rgba(70, 211, 154, .7); }
+}
+html[data-skin="synapse"] .btn.is-busy.primary { animation: syn-breathe 1.6s ease-in-out infinite; }
+html[data-skin="synapse"] .chip { border-radius: 999px; border-color: var(--syn-edge-2); }
+html[data-skin="synapse"] .chip:hover { border-color: var(--accent); color: var(--accent); }
+html[data-skin="synapse"] .chip.is-on {
+  background: rgba(70, 211, 154, .14); border-color: rgba(70, 211, 154, .4); color: var(--accent);
+}
+html[data-skin="synapse"] .tag,
+html[data-skin="synapse"] .badge { border-radius: 999px; }
+html[data-skin="synapse"] .pill-toggle { border-color: var(--syn-edge-2); }
+
+/* fields: the site's form fields */
+html[data-skin="synapse"] .input,
+html[data-skin="synapse"] .select {
+  background: var(--syn-field); border-color: var(--syn-field-edge); border-radius: 12px;
+}
+html[data-skin="synapse"] .input:focus,
+html[data-skin="synapse"] .select:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px rgba(70, 211, 154, .12);
+}
+
+/* --- the practice interview, toasts and other overlays ------------------- */
+html[data-skin="synapse"] .mock-wrap { background: rgba(3, 6, 11, .62); backdrop-filter: blur(10px); }
+html[data-skin="synapse"] .mock {
+  background: rgba(7, 11, 18, .96); border-radius: 24px;
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .95), inset 0 1px 0 rgba(230, 250, 255, .05);
+}
+html[data-skin="synapse"] .toast {
+  background: rgba(7, 11, 18, .94); border-radius: 14px;
+  backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: 0 24px 50px -22px rgba(0, 0, 0, .95);
+}
+html[data-skin="synapse"] .digest-preview,
+html[data-skin="synapse"] .paste-pack {
+  font-family: var(--mono); background: rgba(3, 6, 11, .6);
+}
+
+/* links: green, with the site's quiet underline */
+html[data-skin="synapse"] a:where(:not([class])) {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid rgba(70, 211, 154, .35);
+}
+html[data-skin="synapse"] a:where(:not([class])):hover { border-bottom-color: var(--accent); }
+/* the site's focus ring, in green */
+:where(html[data-skin="synapse"]) :where(button, a[href], summary, select, [role="button"],
+  [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+
+/* --- a soft light under the pointer, as on the site's cards -------------- */
+/* jobs.js keeps --mx/--my at the pointer (mouse and pen; not touch) */
+html[data-skin="synapse"] .card,
+html[data-skin="synapse"] .role-card,
+html[data-skin="synapse"] .step {
+  --mx: 50%;
+  --my: 50%;
+}
+html[data-skin="synapse"] .card,
+html[data-skin="synapse"] .role-card { position: relative; isolation: isolate; }
+html[data-skin="synapse"] .step { isolation: isolate; }
+html[data-skin="synapse"] .card::before,
+html[data-skin="synapse"] .role-card::before,
+html[data-skin="synapse"] .step::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  pointer-events: none; opacity: 0; transition: opacity .3s ease;
+  background: radial-gradient(380px circle at var(--mx) var(--my),
+              rgba(70, 211, 154, .09), transparent 62%);
+}
+@media (hover: hover) {
+  html[data-skin="synapse"] .card:hover::before,
+  html[data-skin="synapse"] .role-card:hover::before,
+  html[data-skin="synapse"] .step:hover::before { opacity: 1; }
 }
 
 

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 18px 22px; }
+  .q { margin: 0 0 14px; }
+  .q > span, label { display: block; font-weight: 600; margin-bottom: 4px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 14px; }
+  fieldset label { display: inline-block; font-weight: 400; margin-right: 12px; }
+  input[type=text], input[type=email], input:not([type]), textarea, select { width: 320px; padding: 6px; }
+  .err { color: #b00020; margin: 4px 0 0; }
+  .upload { display: inline-block; padding: 8px 12px; border: 1px dashed #888; cursor: pointer; font-weight: 600; }
+  .combo { position: relative; width: 340px; }
+  .combo ul { list-style: none; margin: 0; padding: 0; border: 1px solid #aaa; background: #fff;
+    position: absolute; left: 0; right: 0; z-index: 5; }
+  .combo li { padding: 6px 8px; cursor: pointer; }
+  .combo li:hover { background: #eef; }
+  .ticks label { display: block; font-weight: 400; }
+</style>
+</head>
+<body>
+<!-- A two-step application form, in an iframe on another origin. Built the
+     awkward ways real forms are: a label above a box with no "for", a box
+     with only a placeholder, a drop-down inside a web component, a custom
+     list (role=combobox), a hidden file input behind a styled label, its own
+     validation instead of the browser's (novalidate), and step two revealed
+     in the same document. Events are reported to the test server at /log.
+     Used by tools/check_navigator.py. -->
+<form id="f" novalidate>
+  <section id="step1">
+    <h2>Your details</h2>
+    <div class="q"><label for="fn">First name *</label><input id="fn" name="first" required></div>
+    <div class="q"><label>Surname * <input name="surname" required></label></div>
+    <div class="q"><input type="email" name="mail" placeholder="Email address" aria-required="true"></div>
+    <div class="q"><span>Best number to reach you on *</span><input id="cell" name="contact_digits" required>
+      <p class="err" id="cellErr" role="alert" hidden></p></div>
+    <div class="q"><jo-field label="Country of residence"></jo-field></div>
+    <fieldset><legend>How did you hear about us?</legend>
+      <label><input type="radio" name="heard" value="linkedin"> LinkedIn</label>
+      <label><input type="radio" name="heard" value="board"> Job board</label>
+      <label><input type="radio" name="heard" value="friend"> Friend</label>
+    </fieldset>
+    <button type="submit" id="next1">Proceed to step 2</button>
+  </section>
+  <section id="step2" hidden>
+    <h2>A bit more</h2>
+    <div class="q"><label for="cv" class="upload">Attach your CV *</label>
+      <input type="file" id="cv" name="cv" required style="display:none"></div>
+    <div class="q"><label for="why">Why do you want to join Acme? *</label><textarea id="why" required></textarea></div>
+    <div class="q"><span>Current CTC *</span><input id="ctc" required></div>
+    <div class="q combo"><label id="officeLbl">Preferred office *</label>
+      <input id="office" role="combobox" aria-labelledby="officeLbl" aria-autocomplete="list"
+             aria-required="true" autocomplete="off">
+      <ul role="listbox" id="officeList" hidden>
+        <li role="option">Johannesburg</li><li role="option">Cape Town</li><li role="option">Durban</li>
+      </ul></div>
+    <div class="q"><label for="gender">Gender</label>
+      <select id="gender"><option>Select</option><option>Female</option><option>Male</option>
+        <option>Prefer not to say</option></select></div>
+    <div class="q ticks">
+      <label><input type="checkbox" id="privacy"> I agree to the privacy policy</label>
+      <label><input type="checkbox" id="alerts"> Send me job alerts</label>
+    </div>
+    <p class="err" id="step2Err" role="alert" hidden></p>
+    <button type="submit" id="send">Submit application</button>
+  </section>
+</form>
+<script>
+  const log = (e) => fetch("/log?e=" + encodeURIComponent(e)).catch(() => {});
+  customElements.define("jo-field", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({mode: "open"});
+      const lab = document.createElement("label");
+      lab.textContent = this.getAttribute("label") + " ";
+      const sel = document.createElement("select");
+      sel.id = "country";
+      ["Select...", "Kenya", "South Africa", "Zimbabwe"].forEach((t) => {
+        const o = document.createElement("option"); o.textContent = t; sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => { this.value = sel.value; });
+      lab.appendChild(sel);
+      root.appendChild(lab);
+    }
+  });
+  const office = document.getElementById("office"), list = document.getElementById("officeList");
+  const filter = () => {
+    const t = office.value.toLowerCase();
+    list.hidden = false;
+    [...list.children].forEach((li) => { li.hidden = t && !li.textContent.toLowerCase().includes(t); });
+  };
+  office.addEventListener("focus", filter);
+  office.addEventListener("input", filter);
+  [...list.children].forEach((li) => li.addEventListener("click", () => {
+    office.value = li.textContent; list.hidden = true; log("office:" + li.textContent);
+  }));
+  const val = (sel) => { const e = document.querySelector(sel); return e ? e.value.trim() : ""; };
+  const step1 = document.getElementById("step1"), step2 = document.getElementById("step2");
+  document.getElementById("f").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    if (!step1.hidden) {
+      const err = document.getElementById("cellErr");
+      if (!/^0\d{9}$/.test(val("#cell"))) {
+        err.textContent = "Enter a 10-digit number starting with 0"; err.hidden = false;
+        document.getElementById("cell").setAttribute("aria-invalid", "true");
+        log("step1-rejected");
+        return;
+      }
+      if (!val("#fn") || !val("input[name=surname]") || !val("input[name=mail]")) {
+        err.textContent = "Please fill in every required box"; err.hidden = false; return;
+      }
+      err.hidden = true;
+      const shadowSel = document.querySelector("jo-field").shadowRoot.querySelector("select");
+      const heard = document.querySelector("input[name=heard]:checked");
+      log("step1:" + [val("#fn"), val("input[name=surname]"), val("input[name=mail]"), val("#cell"),
+                      shadowSel.value, heard ? heard.value : ""].join("|"));
+      step1.hidden = true; step2.hidden = false;
+      return;
+    }
+    const files = document.getElementById("cv").files;
+    const missing = [!files.length && "CV", !val("#why") && "why", !val("#ctc") && "CTC", !val("#office") && "office"]
+      .filter(Boolean);
+    if (missing.length) {
+      const e2 = document.getElementById("step2Err");
+      e2.textContent = "Still needed: " + missing.join(", "); e2.hidden = false;
+      return;
+    }
+    log("submitted:" + [files[0].name, val("#ctc"), val("#office"), val("#gender"),
+                        document.getElementById("privacy").checked, document.getElementById("alerts").checked].join("|"));
+    location.href = "thanks.html";
+  });
+  // what step two holds, for the check to read before anything is sent
+  window.joState = () => ({
+    step: step1.hidden ? 2 : 1,
+    cv: (document.getElementById("cv").files[0] || {}).name || "",
+    why: val("#why"), ctc: val("#ctc"), office: val("#office"), gender: val("#gender"),
+    privacy: document.getElementById("privacy").checked, alerts: document.getElementById("alerts").checked,
+  });
+</script>
+</body>
+</html>

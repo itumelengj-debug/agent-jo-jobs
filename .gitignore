@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.private
 install.log
+signing-key.private
+.update/
+dist/

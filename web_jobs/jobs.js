@@ -311,6 +311,23 @@ LOADERS.overview = async function () {
   drawWhereFrom();
   drawActivity();
 
+  const iv = (S.data || {}).interviews || [];
+  $("#ovInterviewCard").hidden = !iv.length;
+  const ih = $("#ovInterviews");
+  ih.innerHTML = "";
+  iv.slice(0, 6).forEach((x) => {
+    const row = el("div", "item");
+    row.append(el("div", "mono", initial(x.company)), el("div"),
+               el("span", "tag", whenText(x.at)));
+    row.children[1].append(el("div", "item-t", x.title || ""),
+                           el("div", "item-m", x.company || ""));
+    row.addEventListener("click", () => {
+      const r = (S.roles || []).find((y) => y.key === x.key);
+      show("roles"); if (r) openRole(r);
+    });
+    ih.appendChild(row);
+  });
+
   const fu = (S.data || {}).follow_ups || [];
   $("#ovFollowCard").hidden = !fu.length;
   const fh = $("#ovFollow");
@@ -655,6 +672,49 @@ function showPortalWaiting(s, r) {
   }
 }
 
+// Who did each step of an application: a rule every site shares, something
+// this site taught it before, the engine working it out, or your own answer.
+const BY_SAYS = { rule: "rule", playbook: "learned", engine: "engine", saved: "yours" };
+
+function portalTrail(host, x) {
+  const steps = x.steps || [];
+  if (steps.length) {
+    const det = el("details", "trail");
+    const n = steps.length;
+    det.appendChild(el("summary", "", `What it did (${n} step${n === 1 ? "" : "s"})`));
+    const ol = el("ol", "trail-steps");
+    steps.forEach((s) => {
+      const li = el("li", "trail-step" + (s.ok === false ? " is-off" : ""));
+      li.append(el("span", "trail-by by-" + (s.by || "rule"), BY_SAYS[s.by] || s.by || "rule"),
+                el("span", "", s.say || ""));
+      ol.appendChild(li);
+    });
+    det.appendChild(ol);
+    host.appendChild(det);
+  }
+  const learned = x.learned || [];
+  if (learned.length) {
+    const box = el("div", "learned");
+    box.appendChild(el("h5", "portal-h", "What it learned for next time"));
+    const ul = el("ul", "learned-list");
+    learned.forEach((l) => ul.appendChild(el("li", "", l)));
+    box.appendChild(ul);
+    host.appendChild(box);
+  }
+}
+
+function portalMeta(x) {
+  const bits = [];
+  if (x.explored) {
+    const t = x.engine_turns || 0;
+    bits.push(t ? `the engine was needed ${t} time${t === 1 ? "" : "s"}` : "no engine needed");
+  }
+  if (x.pages) bits.push(`${x.pages} page${x.pages === 1 ? "" : "s"} of form`);
+  if (typeof x.filled === "number" && x.filled) bits.push(`${x.filled} box${x.filled === 1 ? "" : "es"} filled`);
+  const s = bits.join(" · ");
+  return s ? s[0].toUpperCase() + s.slice(1) : "";
+}
+
 function showPortal(x, r) {
   const d = $("#roleDetail");
   const out = el("div", "out portal-out");
@@ -664,16 +724,33 @@ function showPortal(x, r) {
     filled: "Filled in — check it and press submit yourself",
     needs_answer: "It needs answers it couldn't work out",
     unknown_form: "Part of this form is beyond it",
+    needs_login: "This site wants you signed in",
+    needs_captcha: "A captcha needs you",
+    closed: "The advert says it's closed",
+    apply_by_email: "This one wants an email, not a form",
     blocked: "The site blocked automation",
     failed: "Couldn't complete the form",
   }[state] || state);
   out.appendChild(head);
   if (x.message) out.appendChild(el("p", "muted", x.message));
+  const meta = portalMeta(x);
+  if (meta) out.appendChild(el("p", "portal-meta", meta));
   if (x.waited_for_you) {
     out.appendChild(el("p", "muted", x.waited_for_you === "needs_captcha"
       ? "Carried on after you solved the captcha."
       : "Carried on after you signed in."));
   }
+  if (state === "apply_by_email" && x.apply_email) {
+    out.appendChild(el("p", "", `The role now applies by email to ${x.apply_email}: the next run sends it, `
+      + "through the same checks as every emailed application."));
+  }
+  if ((x.left || []).length) {
+    out.appendChild(el("h5", "portal-h", "Left for you"));
+    const ul = el("ul", "left-list");
+    x.left.forEach((l) => ul.appendChild(el("li", "", l)));
+    out.appendChild(ul);
+  }
+  portalTrail(out, x);
   S._portalNudged = false;
 
   const answers = x.answers || [];
@@ -726,6 +803,497 @@ function fact(k, v, hi) {
   return w;
 }
 
+/* --- a designed CV: look, format, language --------------------------------- */
+let RESUME_OPTS = null;
+function resumePicker(key) {
+  const box = el("div", "resume-pick");
+  const tpl = el("select", "select"), fmt = el("select", "select"), lang = el("select", "select");
+  [["pdf", "PDF"], ["docx", "Word (.docx)"]].forEach(([v, t]) => { const o = el("option", "", t); o.value = v; fmt.appendChild(o); });
+  const fill = (o) => {
+    Object.entries(o.templates || {}).forEach(([v, t]) => { const x = el("option", "", t); x.value = v; tpl.appendChild(x); });
+    (o.languages || ["English"]).forEach((l) => { const x = el("option", "", l); x.value = l; lang.appendChild(x); });
+  };
+  if (RESUME_OPTS) fill(RESUME_OPTS);
+  else api("/api/jobs/resume/options").then((o) => { RESUME_OPTS = o; fill(o); }).catch(() => {});
+  const lab = (t, c) => { const l = el("label", "resume-field"); l.append(el("span", "muted", t), c); return l; };
+  const go = el("button", "btn primary", "Make it");
+  const note = el("p", "muted", key
+    ? "Uses this role's tailored CV if you've made one, otherwise your own CV, restyled. One column, real text — safe for the software that reads CVs first."
+    : "Your own CV, restyled — nothing reworded. One column, real text — safe for the software that reads CVs first.");
+  go.addEventListener("click", () => busy(go, lang.value !== "English" ? "Translating…" : "Making…", async () => {
+    const x = await api("/api/jobs/resume", withEngine({ key: key || "", template: tpl.value,
+                                                         format: fmt.value, language: lang.value }));
+    window.location.href = x.url;
+    toast(`Made ${x.filename}` + (x.source ? ` from ${x.source}.` : "."));
+  }));
+  box.append(note, lab("Look", tpl), lab("Format", fmt), lab("Language", lang), go);
+  return box;
+}
+
+/* --- people -------------------------------------------------------------- */
+function personRow(c, compact) {
+  const row = el("div", "item static person");
+  const body = el("div");
+  body.append(el("div", "item-t", c.name || c.email),
+              el("div", "item-m", [c.kind === "person" ? "" : c.kind, (c.companies || []).join(", "),
+                                   c.last ? `last heard ${c.last.slice(0, 10)}` : ""]
+                                   .filter(Boolean).join(" · ")));
+  if (!compact) {
+    const what = Object.entries(c.kinds || {}).map(([k, n]) => `${n} ${k}`).join(", ");
+    if (what) body.appendChild(el("div", "item-m", what +
+      ((c.roles || []).length ? " — about " + c.roles.slice(0, 3).map((r) => r.title).join(", ") : "")));
+    if (c.notes) body.appendChild(el("div", "item-m person-notes", c.notes));
+  }
+  const acts = el("div", "actions");
+  acts.style.margin = "0";
+  const mail = el("button", "btn sm", "Write");
+  mail.title = "Opens your own mail app — nothing is sent from here";
+  mail.addEventListener("click", async () => {
+    window.location.href = "mailto:" + encodeURIComponent(c.email);
+    try { await api("/api/jobs/people/update", { email: c.email, touched: true }); } catch (e) {}
+  });
+  const note = el("button", "btn sm ghost", "Notes");
+  note.addEventListener("click", async () => {
+    const v = prompt(`Notes on ${c.name || c.email}`, c.notes || "");
+    if (v === null) return;
+    await api("/api/jobs/people/update", { email: c.email, notes: v });
+    LOADERS.people();
+  });
+  const done = el("button", "btn sm ghost", c.done ? "Remind me again" : "Done with them");
+  done.title = "Stops them showing under 'worth getting back to'";
+  done.addEventListener("click", async () => {
+    await api("/api/jobs/people/update", { email: c.email, done: !c.done });
+    LOADERS.people();
+  });
+  acts.append(mail, note, done);
+  if (!compact) {
+    const rm = el("button", "btn sm ghost danger", "Remove");
+    rm.addEventListener("click", async () => {
+      if (!confirm(`Remove ${c.name || c.email}?`)) return;
+      await api("/api/jobs/people/remove", { email: c.email });
+      LOADERS.people();
+    });
+    acts.appendChild(rm);
+  }
+  row.append(el("div", "mono", initial(c.name || c.email)), body, acts);
+  return row;
+}
+
+LOADERS.people = async function () {
+  let d = {};
+  try { d = await api("/api/jobs/people"); }
+  catch (e) { empty($("#peopleList"), "Couldn't load", e.message); return; }
+  const ppl = d.people || [];
+  $("#nPeople").textContent = ppl.length || "";
+  const back = d.get_back_to || [];
+  $("#peopleBackCard").hidden = !back.length;
+  const bh = $("#peopleBack"); bh.innerHTML = "";
+  back.slice(0, 6).forEach((c) => {
+    const r = personRow(c, true);
+    r.querySelector(".item-m").textContent += ` · ${c.days} days quiet`;
+    bh.appendChild(r);
+  });
+  const host = $("#peopleList");
+  host.innerHTML = "";
+  if (!ppl.length) {
+    empty(host, "No one yet", " When someone replies to an application (Results → inbox), " +
+      "they appear here. You can also add someone you met or were referred to.");
+    return;
+  }
+  ppl.forEach((c) => host.appendChild(personRow(c, false)));
+};
+
+function wirePeople() {
+  const s = $("#pSync"), a = $("#pAdd");
+  if (!s || s.dataset.wired) return;
+  s.dataset.wired = "1";
+  s.addEventListener("click", () => busy(s, "Gathering…", async () => {
+    const r = await api("/api/jobs/people/sync", {});
+    toast(`${r.people} people` + (r.added ? `, ${r.added} new` : "") +
+          (r.flagged ? ` — ${r.flagged} role(s) at companies where you know someone.` : "."));
+    await refresh(); LOADERS.people();
+  }));
+  a.addEventListener("click", async () => {
+    const email = prompt("Their email address");
+    if (!email) return;
+    const name = prompt("Their name", "") || "";
+    const company = prompt("Where they work (or recruit for)", "") || "";
+    const notes = prompt("How you know them (optional)", "") || "";
+    try {
+      await api("/api/jobs/people", { email, name, company, notes });
+      toast("Added."); await refresh(); LOADERS.people();
+    } catch (e) { toast(e.message, "bad"); }
+  });
+}
+document.addEventListener("DOMContentLoaded", wirePeople);
+
+// on a role: who you know there, and a note to them
+function knowBox(r) {
+  const box = el("div", "out know-box");
+  box.appendChild(el("h4", "", "You know someone here"));
+  (r.know || []).forEach((k) => {
+    const row = el("div", "know-row");
+    row.appendChild(el("p", "", `${k.name} — ${k.kind}` + (k.about ? `, about ${k.about}` : "") +
+                                (k.last ? ` (last heard ${k.last})` : "")));
+    const b = el("button", "btn sm primary", "Draft a note to them");
+    b.addEventListener("click", () => busy(b, "Drafting…", async () => {
+      const x = await api("/api/jobs/people/note", withEngine({ key: r.key, email: k.email }));
+      await refresh();
+      openRole((S.roles || []).find((y) => y.key === r.key) || r);
+      if ((x.note.check || {}).ok === false) toast("Drafted, but it claims something to check.", "bad");
+    }));
+    row.appendChild(b);
+    box.appendChild(row);
+  });
+  const n = r.contact_note;
+  if (n && n.body) {
+    box.appendChild(el("h5", "", `Note to ${n.name || n.to}: ${n.subject || ""}`));
+    if ((n.check || {}).ok === false) {
+      const ul = el("ul");
+      (n.check.problems || []).forEach((p) => ul.appendChild(el("li", "claim", p.detail || String(p))));
+      box.appendChild(ul);
+    }
+    box.appendChild(el("pre", "", n.body));
+    const send = el("button", "btn sm", "Open in my mail app");
+    send.title = "Your mail app opens with this filled in; you press send";
+    send.addEventListener("click", async () => {
+      window.location.href = `mailto:${encodeURIComponent(n.to)}?subject=${encodeURIComponent(n.subject || "")}` +
+        `&body=${encodeURIComponent(n.body)}`;
+      try { await api("/api/jobs/people/update", { email: n.to, touched: true }); } catch (e) {}
+    });
+    box.appendChild(send);
+  }
+  return box;
+}
+
+/* --- editing a draft ---------------------------------------------------- */
+// Your edit becomes the draft, is checked again, and is learned from: phrases
+// you keep cutting stop being written (agent/style.py).
+function draftEditor(host, key, dr, onSaved) {
+  host.innerHTML = "";
+  const subj = el("input", "input");
+  subj.value = dr.subject || ""; subj.placeholder = "Subject";
+  const ta = el("textarea", "input draft-edit");
+  ta.value = dr.body || "";
+  const meta = el("div", "muted mock-meta");
+  const count = () => { meta.textContent = `${ta.value.trim().split(/\s+/).filter(Boolean).length} words`; };
+  ta.addEventListener("input", count); count();
+  const row = el("div", "actions");
+  const save = el("button", "btn primary sm", "Save my version");
+  save.addEventListener("click", () => busy(save, "Saving…", async () => {
+    const x = await api("/api/jobs/draft/save", { key, subject: subj.value, body: ta.value });
+    const ok = ((x.draft || {}).check || {}).ok !== false;
+    toast(ok ? (x.learned ? "Saved — and noted how you changed it." : "Saved.")
+             : "Saved, but it still claims something your profile can't back.", ok ? "" : "bad");
+    await refresh(); railCounts();
+    if (onSaved) onSaved(x.draft);
+  }));
+  const cancel = el("button", "btn sm ghost", "Cancel");
+  cancel.addEventListener("click", () => onSaved && onSaved(null));
+  row.append(save, cancel);
+  host.append(subj, ta, meta, row);
+  ta.focus();
+}
+
+async function drawStyle() {
+  const host = $("#styleBody");
+  if (!host) return;
+  let s = {};
+  try { s = await api("/api/jobs/style"); } catch (e) { host.textContent = "Couldn't read it."; return; }
+  host.innerHTML = "";
+  host.appendChild(el("p", "lede", s.edits
+    ? `Learned from ${s.edits} draft(s) you edited. A rule needs ${s.needs} edits agreeing; ` +
+      "new drafts and follow-ups follow these. They never let a draft claim more."
+    : "Edit a draft before you send it (open a role → the draft → Edit) and the changes you " +
+      "keep making become rules here — phrases you always cut, how long you like it, your sign-off."));
+  (s.rules || []).forEach((r) => {
+    const row = el("div", "item static style-rule");
+    const t = el("div"); t.append(el("div", "item-t", r.text));
+    const f = el("button", "btn sm ghost", "Forget");
+    f.addEventListener("click", () => busy(f, "…", async () => {
+      await api("/api/jobs/style/forget", { id: r.id }); drawStyle();
+    }));
+    row.append(el("span", "tag", r.kind), t, f);
+    host.appendChild(row);
+  });
+  if (s.edits) {
+    const reset = el("button", "btn sm ghost", "Forget all of it");
+    reset.addEventListener("click", () => {
+      if (!confirm("Forget every edit and rule it learned?")) return;
+      busy(reset, "…", async () => { await api("/api/jobs/style/reset", {}); drawStyle(); });
+    });
+    host.appendChild(reset);
+  }
+}
+
+/* --- practice interview ------------------------------------------------ */
+// One question at a time, typed or dictated; feedback after each; a summary
+// at the end. Speech is the browser's own: reading aloud happens on this
+// machine; dictation in Chrome and Edge is turned into text by Google's or
+// Microsoft's speech service, so the window says so. This app keeps no audio.
+const SPEECH_REC = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+async function openMock(r) {
+  const wrap = el("div", "mock-wrap");
+  const box = el("div", "mock");
+  wrap.appendChild(box);
+  const close = () => { try { speechSynthesis.cancel(); } catch (e) {} stopDictation(); wrap.remove(); };
+  wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+  document.addEventListener("keydown", function esc(e) {
+    if (e.key === "Escape" && document.body.contains(wrap)) { close(); document.removeEventListener("keydown", esc); }
+  });
+  document.body.appendChild(wrap);
+  let speak = false, rec = null;
+  function stopDictation() { try { rec && rec.stop(); } catch (e) {} rec = null; }
+  const say = (t) => {
+    if (!speak || !window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(t));
+  };
+
+  const head = (sub) => {
+    box.innerHTML = "";
+    const h = el("div", "mock-head");
+    h.append(el("div", "", ""), el("button", "btn sm ghost", "Close"));
+    h.children[0].append(el("h3", "", "Practice interview"),
+                         el("div", "muted", `${r.title || ""} @ ${r.company || ""}` + (sub ? " · " + sub : "")));
+    h.children[1].addEventListener("click", close);
+    box.appendChild(h);
+  };
+
+  // the start page: history, and what this is
+  head("");
+  let st = {};
+  try { st = await api("/api/jobs/mock?key=" + encodeURIComponent(r.key)); } catch (e) {}
+  box.appendChild(el("p", "", "One question at a time, as in the room. Answer out loud or type — " +
+    "after each answer you get a score, the one thing to change, and a stronger version built " +
+    "only from your CV. Claims your CV can't back are flagged: that's what they'll check."));
+  const hist = (st.history || []).filter((h) => h.average != null);
+  if (hist.length) box.appendChild(el("p", "muted", "Your last attempts: " +
+    hist.slice(-5).map((h) => `${h.average}/5 (${h.at.slice(0, 10)})`).join(" → ")));
+  const opts = el("label", "mock-opt");
+  const cb = el("input"); cb.type = "checkbox";
+  opts.append(cb, document.createTextNode(" Read the questions aloud"));
+  if (window.speechSynthesis) box.appendChild(opts);
+  const go = el("button", "btn primary", st.current ? "Start again" : "Start");
+  box.appendChild(go);
+  go.addEventListener("click", () => busy(go, "Preparing questions…", async () => {
+    speak = cb.checked;
+    const q = await api("/api/jobs/mock/start", withEngine({ key: r.key }));
+    ask(q);
+  }));
+
+  function ask(q) {
+    head(`question ${q.number} of ${q.of}`);
+    const bar = el("div", "mock-bar"); const fill = el("i");
+    fill.style.width = `${Math.round(100 * (q.number - 1) / q.of)}%`;
+    bar.appendChild(fill); box.appendChild(bar);
+    box.appendChild(el("div", "mock-q", q.question));
+    say(q.question);
+    const ta = el("textarea", "input mock-a");
+    ta.placeholder = "Your answer — as you'd say it. About a minute.";
+    box.appendChild(ta);
+    const meta = el("div", "muted mock-meta", "0 words");
+    ta.addEventListener("input", () => {
+      const n = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+      meta.textContent = `${n} words · about ${Math.max(1, Math.round(n / 130 * 60))}s spoken`;
+    });
+    box.appendChild(meta);
+    const row = el("div", "actions");
+    if (SPEECH_REC) {
+      const mic = el("button", "btn sm", "🎙 Dictate");
+      mic.addEventListener("click", () => {
+        if (rec) { stopDictation(); mic.textContent = "🎙 Dictate"; return; }
+        rec = new SPEECH_REC(); rec.continuous = true; rec.interimResults = false;
+        rec.lang = navigator.language || "en-ZA";
+        rec.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++)
+            if (e.results[i].isFinal) ta.value += (ta.value && !/\s$/.test(ta.value) ? " " : "") + e.results[i][0].transcript.trim();
+          ta.dispatchEvent(new Event("input"));
+        };
+        rec.onend = () => { rec = null; mic.textContent = "🎙 Dictate"; };
+        rec.onerror = (e) => toast("Dictation: " + (e.error || "stopped") +
+          (e.error === "not-allowed" ? " — allow the microphone for this page." : ""), "bad");
+        try { rec.start(); mic.textContent = "■ Stop"; } catch (e) { toast(e.message, "bad"); }
+      });
+      row.appendChild(mic);
+      mic.title = "Your browser turns speech into text — in Chrome and Edge that goes through " +
+        "Google's or Microsoft's speech service. Type instead if you'd rather it didn't.";
+    }
+    const send = el("button", "btn primary", "Done — feedback");
+    send.addEventListener("click", () => busy(send, "Listening back…", async () => {
+      stopDictation();
+      const x = await api("/api/jobs/mock/answer", withEngine({ key: r.key, text: ta.value }));
+      feedback(x);
+    }));
+    const end = el("button", "btn sm ghost", "End here");
+    end.addEventListener("click", () => busy(end, "…", summary));
+    row.append(send, end);
+    box.appendChild(row);
+    ta.focus();
+  }
+
+  function feedback(x) {
+    head(x.done ? "last answer" : `next: ${x.number} of ${x.of}`);
+    box.appendChild(el("div", "mock-q small", x.question_answered));
+    const fb = x.feedback || {}, lc = x.local || {};
+    const sc = fb.score != null ? fb.score : fb.local_score;
+    const badge = el("div", "mock-score s" + (sc || 0), sc != null ? `${sc}/5` : "—");
+    if (fb.score == null) badge.title = "A rough score from the checks below — connect an engine for a full read.";
+    box.appendChild(badge);
+    if (fb.error) box.appendChild(el("p", "muted", fb.error));
+    else if (fb.score == null) box.appendChild(el("p", "muted",
+      "A rough score from the checks below — choose an engine for a full read and a stronger version."));
+    if (fb.worked) { box.appendChild(el("h5", "", "What worked")); box.appendChild(el("p", "", fb.worked)); }
+    if (fb.fix) { box.appendChild(el("h5", "", "Change this")); box.appendChild(el("p", "mock-fix", fb.fix)); }
+    const checks = el("ul", "mock-checks");
+    [["A concrete example", lc.example], ["A result or a number", lc.result]].forEach(([t, ok]) =>
+      checks.appendChild(el("li", ok ? "ok" : "no", (ok ? "✓ " : "✗ ") + t)));
+    (lc.notes || []).filter((n) => !/^No (concrete|result)/.test(n))
+      .forEach((n) => checks.appendChild(el("li", "no", "• " + n)));
+    (lc.claims || []).forEach((c) => checks.appendChild(el("li", "claim", "⚠ " + c)));
+    box.appendChild(checks);
+    if (fb.better) {
+      const d = el("details", "mock-better");
+      d.appendChild(el("summary", "", "A stronger version, from your CV"));
+      d.appendChild(el("p", "", fb.better));
+      (fb.better_flags || []).forEach((f) => d.appendChild(el("p", "prep-gap", "Check: " + f)));
+      box.appendChild(d);
+    }
+    const row = el("div", "actions");
+    if (!x.done) {
+      const nx = el("button", "btn primary", "Next question");
+      nx.addEventListener("click", () => ask(x));
+      row.appendChild(nx);
+      const end = el("button", "btn sm ghost", "End here");
+      end.addEventListener("click", () => busy(end, "…", summary));
+      row.appendChild(end);
+    } else {
+      const sm = el("button", "btn primary", "See how it went");
+      sm.addEventListener("click", () => busy(sm, "…", summary));
+      row.appendChild(sm);
+    }
+    box.appendChild(row);
+  }
+
+  async function summary() {
+    stopDictation();
+    const s = await api("/api/jobs/mock/finish", { key: r.key });
+    head("summary");
+    box.appendChild(el("div", "mock-score big s" + Math.round(s.average || 0),
+                       s.average != null ? `${s.average}/5` : "—"));
+    let line = `${s.answered} of ${s.of} questions answered.`;
+    if (s.change != null) line += s.change > 0 ? ` Up ${s.change} on last time (${s.last_average}).`
+      : s.change < 0 ? ` Down ${-s.change} on last time (${s.last_average}).` : " Same as last time.";
+    if (s.scale === "local") line += " Scored by the local checks only — connect an engine for full feedback.";
+    box.appendChild(el("p", "", line));
+    if ((s.work_on || []).length) {
+      box.appendChild(el("h5", "", "Work on these"));
+      const ul = el("ul");
+      s.work_on.forEach((w) => {
+        const li = el("li");
+        li.append(el("b", "", `${w.score}/5 — ${w.question}`), el("div", "muted", w.fix || ""));
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    } else box.appendChild(el("p", "", "Nothing below a 4. Practise once more the day before."));
+    if ((s.claims || []).length) {
+      box.appendChild(el("h5", "", "Said, but not in your CV"));
+      const ul = el("ul");
+      s.claims.forEach((c) => ul.appendChild(el("li", "claim", c)));
+      box.appendChild(ul);
+    }
+    const row = el("div", "actions");
+    const again = el("button", "btn primary", "Practise again");
+    again.addEventListener("click", () => busy(again, "Preparing…", async () =>
+      ask(await api("/api/jobs/mock/start", withEngine({ key: r.key })))));
+    const done = el("button", "btn sm ghost", "Close");
+    done.addEventListener("click", close);
+    row.append(again, done);
+    box.appendChild(row);
+  }
+}
+
+// "2026-10-14 10:00" → "Tue 14 Oct, 10:00"
+function whenText(at) {
+  const d = new Date(String(at || "").replace(" ", "T"));
+  if (isNaN(d)) return at || "";
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })
+    + ", " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+// the interview's time — read from the invitation or set by you — and a
+// calendar file with the prep in its notes
+function interviewBox(r) {
+  const box = el("div", "out interview-when");
+  const at = r.interview_at;
+  box.appendChild(el("h4", "", at ? "Interview: " + whenText(at) : "When is the interview?"));
+  if (at && r.interview_said)
+    box.appendChild(el("p", "muted", `Read from the invitation: “${r.interview_said}”`));
+  if (r.interview_tz_note) box.appendChild(el("p", "prep-gap", r.interview_tz_note));
+  if (!at) box.appendChild(el("p", "muted",
+    "The invitation didn't give one clear time. Set it once it's agreed."));
+  const a = el("div", "actions");
+  if (r.interview_link) {
+    const j = el("button", "btn sm", "Open the meeting link");
+    j.addEventListener("click", () => window.open(r.interview_link, "_blank", "noopener"));
+    a.appendChild(j);
+  }
+  if (at) {
+    const c = el("button", "btn sm primary", "Add to calendar");
+    c.addEventListener("click", () => {
+      window.location.href = "/api/jobs/interview.ics?key=" + encodeURIComponent(r.key);
+    });
+    a.appendChild(c);
+  }
+  const brief = el("button", "btn sm", "One-page brief (PDF)");
+  brief.title = "Your best stories, the gaps, who you know there and what to ask — to read before the call";
+  brief.addEventListener("click", () => busy(brief, "Making…", async () => {
+    const x = await api("/api/jobs/brief", { key: r.key });
+    window.location.href = x.url;
+  }));
+  a.appendChild(brief);
+  const set = el("button", "btn sm", at ? "Change the time" : "Set the time");
+  set.addEventListener("click", async () => {
+    const v = prompt("Interview time (YYYY-MM-DD HH:MM) — leave empty to clear",
+                     at || new Date().toISOString().slice(0, 10) + " 10:00");
+    if (v === null) return;
+    const link = prompt("Meeting link (optional)", r.interview_link || "");
+    try {
+      await api("/api/jobs/interview-time", { key: r.key, at: v.trim(), link: (link || "").trim() });
+      await refresh();
+      openRole((S.roles || []).find((y) => y.key === r.key) || r);
+    } catch (e) { toast(e.message || String(e)); }
+  });
+  a.appendChild(set);
+  box.appendChild(a);
+  return box;
+}
+
+// questions, the answer your CV gives, and the gaps to think about first
+function prepView(x) {
+  const box = el("div", "prep");
+  const qs = (x && x.questions) || [];
+  if (!qs.length) { box.appendChild(el("p", "muted", "No questions came back.")); return box; }
+  const gaps = qs.filter((q) => (q.gap || "").trim()).length;
+  box.appendChild(el("p", "muted", `${qs.length} likely question(s)` +
+    (gaps ? ` — ${gaps} with nothing in your CV to draw on: think about those first.` : ".")));
+  qs.forEach((q) => {
+    const it = el("details", "prep-q");
+    it.appendChild(el("summary", "", q.question || String(q)));
+    if (q.answer_from_profile) it.appendChild(el("p", "", q.answer_from_profile));
+    if ((q.gap || "").trim()) it.appendChild(el("p", "prep-gap", "Gap: " + q.gap));
+    box.appendChild(it);
+  });
+  if ((x.ask_them || []).length) {
+    box.appendChild(el("h5", "", "Ask them"));
+    const ul = el("ul");
+    x.ask_them.forEach((a) => ul.appendChild(el("li", "", String(a))));
+    box.appendChild(ul);
+  }
+  return box;
+}
+
 function openRole(r) {
   const d = $("#roleDetail");
   d.innerHTML = "";
@@ -753,6 +1321,8 @@ function openRole(r) {
     fact("Apply by", r.apply_email ? "email" : "portal"));
   d.appendChild(facts);
   if (r.state_why) d.appendChild(el("p", "muted", r.state_why));
+  if ((r.must_missing || []).length)
+    d.appendChild(el("p", "prep-gap", "Doesn't mention your must-haves: " + r.must_missing.join(", ") + " — worth asking."));
   if (r.summary) d.appendChild(el("div", "doc-body", r.summary));
 
   const out = el("div");
@@ -767,7 +1337,7 @@ function openRole(r) {
     held: "Draft the application", needs_redraft: "Draft the application",
     no_address: "Apply via the portal (rehearse)",
     applied: "Draft a follow-up", waiting: "Draft a follow-up",
-    responded: "Interview prep", interview: "Interview prep",
+    responded: "Interview prep", interview: "Practise the interview",
   }[r.bucket || r.stage || "found"];
   const group = (title, buttons) => {
     const g = el("div", "actions-group");
@@ -827,7 +1397,9 @@ function openRole(r) {
     ["Tailor my CV", act("/api/jobs/cv", "Tailoring…", (x) =>
       show("Tailored CV", (x.text || x.cv || "") + (x.path ? `\n\nSaved to ${x.path}` : "")))],
     ["Interview prep", act("/api/jobs/interview", "Preparing…", (x) =>
-      show("Likely questions", x.text || (x.questions || []).map((q) => "• " + (q.q || q)).join("\n")))],
+      show("Interview prep", prepView(x)))],
+    ["Practise the interview", () => openMock(r)],
+    ["Designed CV (PDF / Word)", () => show("Designed CV", resumePicker(r.key))],
     ["Save to a file", act("/api/jobs/save-file", "Saving…", (x) =>
       show("Saved", x.path || "Written."))],
   ]);
@@ -880,6 +1452,17 @@ function openRole(r) {
     }, "danger"],
   ]);
 
+  if ((r.know || []).length) d.appendChild(knowBox(r));
+  if (r.interview_at || r.stage === "interview") d.appendChild(interviewBox(r));
+
+  // prep made earlier — by you, or by the cycle when an invitation arrived
+  if ((r.interview || {}).questions && (r.interview.questions || []).length) {
+    const box = el("div", "out");
+    box.appendChild(el("h4", "", "Interview prep"));
+    box.appendChild(prepView(r.interview));
+    d.appendChild(box);
+  }
+
   // what the app already knows about this role, rather than empty space:
   // why it scored, what the draft says, and what has happened to it
   const why = (r.fit || {}).why || (r.fit || {}).reason;
@@ -887,6 +1470,17 @@ function openRole(r) {
     const box = el("div", "out");
     box.appendChild(el("h4", "", "Why this score"));
     box.appendChild(el("pre", "", why));
+    d.appendChild(box);
+  }
+  // its last go at this role's form: what it did there and what it learned
+  const lp = r.portal || {};
+  if ((lp.steps || []).length || (lp.learned || []).length) {
+    const box = el("div", "out portal-last");
+    box.appendChild(el("h4", "", "Its last go at the form" + (r.portal_at ? ` · ${r.portal_at}` : "")));
+    if (lp.message) box.appendChild(el("p", "muted", lp.message));
+    const meta = portalMeta(lp);
+    if (meta) box.appendChild(el("p", "portal-meta", meta));
+    portalTrail(box, lp);
     d.appendChild(box);
   }
   const dr = r.draft || {};
@@ -900,7 +1494,49 @@ function openRole(r) {
         ul.appendChild(el("li", "", p.detail || String(p))));
       box.appendChild(ul);
     }
-    box.appendChild(el("pre", "", dr.body));
+    const q = dr.quality || {};
+    if (q.score != null) {
+      const qb = el("div", "quality q-" + (q.grade || ""));
+      qb.appendChild(el("b", "", `Quality ${q.score}/100 — ${q.grade}`));
+      if ((q.reasons || []).length) {
+        const ul = el("ul");
+        q.reasons.forEach((x) => ul.appendChild(el("li", "", x)));
+        qb.appendChild(ul);
+      } else if ((q.good || []).length) qb.appendChild(el("p", "muted", q.good.join(" ")));
+      box.appendChild(qb);
+    }
+    const pre = el("pre", "", dr.body);
+    box.appendChild(pre);
+    if (dr.edited) box.appendChild(el("p", "muted", "Your version."));
+    else if ((dr.learned_from || []).length) {
+      box.appendChild(el("p", "muted", "Its tone and shape learned from your letters that got replies: "
+        + dr.learned_from.join("; ") + "."));
+    }
+    const ed = el("button", "btn sm", "Edit");
+    ed.addEventListener("click", () => {
+      const host = el("div");
+      box.replaceChild(host, pre); ed.remove();
+      draftEditor(host, r.key, dr, () =>
+        openRole((S.roles || []).find((y) => y.key === r.key) || r));
+    });
+    box.appendChild(ed);
+    const tr = el("button", "btn sm ghost", "Translate");
+    tr.addEventListener("click", () => {
+      const lang = prompt("Translate the letter into which language?", "Afrikaans");
+      if (!lang) return;
+      busy(tr, "Translating…", async () => {
+        const x = await api("/api/jobs/translate-letter", withEngine({ key: r.key, language: lang }));
+        const t = el("div", "out");
+        t.append(el("h4", "", `${x.language}: ${x.subject || ""}`), el("pre", "", x.body));
+        box.after(t);
+      });
+    });
+    box.appendChild(tr);
+    Object.entries(r.draft_translations || {}).forEach(([lang, t]) => {
+      const det = el("details", "mock-better");
+      det.append(el("summary", "", `In ${lang}`), el("pre", "", (t.subject ? t.subject + "\n\n" : "") + t.body));
+      box.appendChild(det);
+    });
     d.appendChild(box);
   }
   const ev = r.events || [];
@@ -1153,7 +1789,15 @@ function showDraft(h) {
   if (h.body) {
     const b = el("div", "out");
     b.appendChild(el("h4", "", h.subject || "The draft"));
-    b.appendChild(el("pre", "", h.body));
+    const pre = el("pre", "", h.body);
+    b.appendChild(pre);
+    const ed = el("button", "btn sm", "Edit it myself");
+    ed.addEventListener("click", () => {
+      const host = el("div");
+      b.replaceChild(host, pre); ed.remove();
+      draftEditor(host, h.key, h, (dr) => { if (dr) LOADERS.drafts(); else showDraft(h); });
+    });
+    b.appendChild(ed);
     d.appendChild(b);
   }
   const a = el("div", "actions");
@@ -1202,11 +1846,85 @@ async function drawReadiness() {
   (r.blockers || []).forEach((b) => {
     const row = el("div", "ready-row");
     row.append(el("span", "ready-what", b.what), el("span", "ready-fix", b.fix));
+    if (b.where && b.where !== S.view) {
+      const go = el("button", "btn sm", "Fix it");
+      go.addEventListener("click", () => show(b.where));
+      row.appendChild(go);
+    } else if (b.where === "auto") {
+      const go = el("button", "btn sm", "Fix it");
+      go.addEventListener("click", () => { const c = $("#emailCard"); if (c) c.scrollIntoView({ behavior: "smooth" }); });
+      row.appendChild(go);
+    }
     box.appendChild(row);
   });
   (r.notes || []).forEach((n) => box.appendChild(el("div", "ready-note", n)));
+  if ((r.settling_in || {}).on) {
+    const end = el("button", "btn sm ghost", "End settling-in now");
+    end.addEventListener("click", () => busy(end, "…", async () => {
+      if (!confirm("Run at your full daily cap from now on?")) return;
+      await api("/api/jobs/auto/settled", {}); drawReadiness();
+    }));
+    box.appendChild(end);
+  }
   host.appendChild(box);
   return r;
+}
+
+// the account applications are emailed from (it lived in Agent Jo before the
+// apps split, which left this app with no way to set it up)
+async function drawEmail() {
+  const host = $("#emailBody");
+  if (!host) return;
+  let st = {};
+  try { st = await api("/api/jobs/email"); } catch (e) { return; }
+  host.innerHTML = "";
+  const f = (id, label, val, type, ph) => {
+    const w = el("label", "resume-field");
+    const i = el("input", "input"); i.id = id; i.value = val || ""; i.type = type || "text";
+    if (ph) i.placeholder = ph;
+    w.append(el("span", "muted", label), i);
+    return w;
+  };
+  const grid = el("div", "email-grid");
+  grid.append(f("mAddr", "Your email address", st.from_addr, "email", "you@example.com"),
+              f("mName", "Your name as it appears", st.from_name, "text", "Thandi Mokoena"),
+              f("mPass", st.has_password ? "Password (saved — leave blank to keep)" : "Password", "", "password",
+                "an app password for Gmail"),
+              f("mHost", "Mail server (SMTP)", st.host, "text", "smtp.gmail.com"),
+              f("mPort", "Port", st.port || 587, "number"));
+  host.appendChild(grid);
+  const hint = el("p", "muted", "");
+  host.appendChild(hint);
+  $("#mAddr").addEventListener("change", async () => {
+    const a = $("#mAddr").value.trim();
+    try {
+      const pr = await api("/api/jobs/email/preset?address=" + encodeURIComponent(a));
+      if (pr.host && !$("#mHost").value) { $("#mHost").value = pr.host; $("#mPort").value = pr.port; }
+      hint.textContent = pr.note || "";
+    } catch (e) {}
+  });
+  const row = el("div", "actions");
+  const on = el("label", "mock-opt");
+  const cb = el("input"); cb.type = "checkbox"; cb.id = "mOn"; cb.checked = st.configured ? !!st.enabled : true;
+  on.append(cb, document.createTextNode(" Send applications from this account"));
+  const save = el("button", "btn primary", "Save");
+  save.addEventListener("click", () => busy(save, "Saving…", async () => {
+    await api("/api/jobs/email", { from_addr: $("#mAddr").value.trim(), from_name: $("#mName").value.trim(),
+      password: $("#mPass").value, host: $("#mHost").value.trim(), port: +$("#mPort").value || 587,
+      username: $("#mAddr").value.trim(), use_tls: true, enabled: cb.checked });
+    toast("Saved. Send yourself a test to be sure it works.");
+    drawEmail(); drawReadiness();
+  }));
+  const test = el("button", "btn", "Send a test to myself");
+  test.addEventListener("click", () => busy(test, "Sending…", async () => {
+    const x = await api("/api/jobs/email/test", {});
+    toast(`Sent to ${x.to} — check your inbox.`);
+  }));
+  row.append(save, test);
+  host.append(on, row);
+  host.appendChild(el("p", "muted", st.configured
+    ? `Set up: ${st.from_addr} via ${st.host}` + (st.enabled ? "." : " — but sending is switched off.")
+    : "Not set up yet — emailed applications can't be sent until it is. The password is stored encrypted on this computer."));
 }
 
 async function drawAutoPreview() {
@@ -1228,7 +1946,13 @@ async function drawAutoPreview() {
 
 async function saveAuto(btn) {
   await busy(btn, "Saving…", async () => {
+    const a = (S.data || {}).auto || {};
+    // changing what's delivered by hand lifts "Draft only" — otherwise it
+    // would keep sending nothing with no switch on the form to say why
+    const handChanged = $("#aDry").checked !== (a.dry_run !== false)
+      || $("#aPortal").value !== (a.portal_mode || "prepare");
     await api("/api/jobs/auto", {
+      ...(a.level === "draft" && !handChanged ? {} : { deliver: true }),
       enabled: $("#aOn").checked, dry_run: $("#aDry").checked,
       require_clean_check: $("#aClean").checked,
       portal_mode: $("#aPortal").value,
@@ -1236,7 +1960,7 @@ async function saveAuto(btn) {
       signature: $("#aSig").value,
     });
     toast("Rules saved.");
-    await refresh(); railCounts(); drawAutoPreview(); drawReadiness();
+    await refresh(); railCounts(); drawAutoPreview(); drawReadiness(); drawLevels();
   });
 }
 
@@ -1373,6 +2097,9 @@ function engSay(msg, kind) {
 }
 
 LOADERS.engines = async function () {
+  drawUpdates();
+  drawPhone();
+  drawBackups();
   drawPresets();
   const host = $("#engList");
   host.innerHTML = "";
@@ -1472,6 +2199,8 @@ function followSignIn(s) {
 
 /* --- results ----------------------------------------------------------- */
 LOADERS.results = async function () {
+  drawInbox();
+  drawDigest(false);
   let d = {};
   try { d = await api("/api/jobs/outcomes", undefined, "GET"); }
   catch (e) { empty($("#findings"), "Couldn't load", e.message); return; }
@@ -1546,10 +2275,177 @@ const FIELDS = [
   ["skills", "Core Skills", "Power BI dashboard development, DAX, data modelling"],
   ["technologies", "Tools", "Power BI, SQL Server, SSIS, Snowflake"],
   ["locations_ok", "Location Preferences", "Johannesburg, remote"],
+  ["deal_breakers", "Deal-breakers — never apply if the advert says", "commission only, night shift, relocation required"],
+  ["must_haves", "Must-haves — shown when an advert doesn't mention them", "remote, medical aid"],
+];
+// what every company form asks for — there was nowhere to enter these, so
+// every portal application stopped asking for them
+const CONTACT = [
+  ["full_name", "Full name", "Thandi Mokoena"],
+  ["email", "Email for applications", "you@example.com (blank: your sending address)"],
+  ["phone", "Phone", "+27 82 000 0000"],
+  ["location", "Where you live", "Johannesburg, Gauteng, South Africa"],
+  ["linkedin", "LinkedIn", "https://www.linkedin.com/in/…"],
+  ["availability", "Notice period / availability", "30 days"],
 ];
 const TICK = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="m5 8.2 2 2L11 6"/></svg>';
 
+/* --- your full CV (agent/cvstore.py) --------------------------------------- */
+async function drawCvStatus() {
+  let st = {};
+  try { st = await api("/api/jobs/cvtext"); } catch (e) { return; }
+  $("#cvStatus").textContent = st.present
+    ? `CV saved ${st.at}: ${st.sections} sections, ${st.chars.toLocaleString()} characters. ` +
+      "Drafts and form answers draw on it. Paste a newer one to replace it."
+    : "Paste your whole CV once. Drafts and form answers draw on the parts that fit " +
+      "each question, and empty profile fields below are filled from it.";
+}
+function wireCv() {
+  $("#cvSave").addEventListener("click", (e) => busy(e.target, "Reading your CV…", async () => {
+    const text = $("#cvText").value;
+    const x = await api("/api/jobs/cvtext", { text, engine: S.engine });
+    $("#cvText").value = "";
+    const pf = x.profile || {};
+    toast(`CV saved: ${x.sections} sections.` + (pf.ok
+      ? (pf.filled && pf.filled.length ? ` Filled from it: ${pf.filled.join(", ")}.`
+                                        : " Your profile already had everything it says.")
+      : ` The profile wasn't filled: ${pf.error || "no engine"}.`), pf.ok ? "" : "warn");
+    await drawCvStatus();
+    LOADERS.profile();
+  }));
+  $("#cvUpload").addEventListener("click", () => $("#cvFile").click());
+  $("#cvFile").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    busy($("#cvUpload"), "Reading " + file.name + "…", async () => {
+      const data = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result); r.onerror = () => rej(new Error("Couldn't read that file."));
+        r.readAsDataURL(file);
+      });
+      const x = await api("/api/jobs/cvfile", { name: file.name, data, engine: S.engine });
+      const pf = x.profile || {};
+      const li = x.linkedin;
+      toast(`${file.name} read: ${x.sections} sections.` +
+        (li ? " Read as your LinkedIn profile" + ((li.filled || []).length
+              ? ` — filled ${li.filled.join(", ")}.` : ".") : "") +
+        (pf.ok && pf.filled && pf.filled.length ? ` Filled from it: ${pf.filled.join(", ")}.` : ""),
+        pf.ok ? "" : "warn");
+      await drawCvStatus();
+      LOADERS.profile();
+    });
+  });
+  $("#cvClear").addEventListener("click", async () => {
+    if (!confirm("Remove the saved CV? Your profile stays as it is.")) return;
+    await api("/api/jobs/cvtext", undefined, "DELETE");
+    toast("CV removed."); drawCvStatus();
+  });
+}
+
+/* --- your answers (agent/answerbank.py) ------------------------------------ */
+let ANSWERS = [];
+function drawAnswers() {
+  const list = $("#ansList");
+  list.innerHTML = "";
+  const q = ($("#ansFilter").value || "").toLowerCase();
+  const shown = ANSWERS.filter((a) => !q || (a.question + " " + a.answer).toLowerCase().includes(q));
+  $("#nAnswers").textContent = ANSWERS.length || "";
+  if (!shown.length) {
+    list.appendChild(el("p", "lede", ANSWERS.length ? "Nothing matches."
+      : "Nothing saved yet. Answers are saved as you fill in forms with the helper, or add one above."));
+    return;
+  }
+  shown.forEach((a) => {
+    const row = el("div", "ans-item");
+    const head = el("div");
+    head.append(el("div", "ans-q", a.question),
+      el("div", "ans-meta", [a.site, a.role, a.uses ? `used ${a.uses}×` : "not reused yet", a.at]
+        .filter(Boolean).join(" · ")));
+    const acts = el("div", "ans-acts");
+    if (a.sensitive) {
+      const lab = el("label", "ans-sens");
+      const cb = el("input"); cb.type = "checkbox"; cb.checked = !!a.reuse;
+      cb.addEventListener("change", async () => {
+        await api(`/api/jobs/answers/${a.id}`, { reuse: cb.checked });
+        a.reuse = cb.checked;
+        toast(cb.checked ? "This answer will be reused." : "This answer won't be reused.");
+      });
+      lab.append(cb, document.createTextNode("reuse"));
+      lab.title = "A sensitive question: reused only if you switch it on";
+      acts.appendChild(lab);
+    }
+    const del = el("button", "btn", "Delete");
+    del.addEventListener("click", async () => {
+      await api(`/api/jobs/answers/${a.id}`, undefined, "DELETE");
+      ANSWERS = ANSWERS.filter((x) => x.id !== a.id); drawAnswers();
+    });
+    acts.appendChild(del);
+    const ta = el("textarea", "input ans-a"); ta.rows = 2; ta.value = a.answer;
+    ta.addEventListener("change", async () => {
+      await api(`/api/jobs/answers/${a.id}`, { answer: ta.value });
+      a.answer = ta.value; toast("Answer updated.");
+    });
+    row.append(head, acts, ta);
+    list.appendChild(row);
+  });
+}
+function drawOpen(open) {
+  const box = $("#ansOpen");
+  box.innerHTML = "";
+  $("#ansOpenCard").hidden = !open.length;
+  const badge = $("#nAnswers");
+  badge.classList.toggle("warn", !!open.length);
+  badge.title = open.length ? `${open.length} question(s) waiting on you` : "";
+  if (open.length) badge.textContent = open.length;
+  open.forEach((q) => {
+    const it = el("div", "open-item");
+    it.appendChild(el("div", "ans-q", q.question));
+    it.appendChild(el("div", "ans-meta",
+      (q.roles.length ? `holding up ${q.roles.length}: ${q.roles.slice(0, 3).join("; ")}`
+                      : "asked by a form") + (q.sensitive ? " · sensitive: only ever used for this" : "")));
+    const row = el("div", "open-row");
+    const inp = el("input", "input"); inp.placeholder = "Your answer";
+    const go = el("button", "btn primary", "Save");
+    const save = () => busy(go, "Saving…", async () => {
+      if (!inp.value.trim()) return;
+      const x = await api("/api/jobs/answers/open", { question: q.question, answer: inp.value });
+      toast("Saved. Forms that ask this will get your answer.");
+      drawOpen(x.open || []);
+      LOADERS.answers();
+    });
+    go.addEventListener("click", save);
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    row.append(inp, go);
+    it.appendChild(row);
+    box.appendChild(it);
+  });
+}
+async function refreshOpen() {
+  try { drawOpen((await api("/api/jobs/answers/open")).open || []); }
+  catch (e) { /* the badge just stays as it was */ }
+}
+LOADERS.answers = async function () {
+  try { ANSWERS = (await api("/api/jobs/answers")).answers || []; }
+  catch (e) { ANSWERS = []; }
+  drawAnswers();
+  await refreshOpen();
+};
+function wireAnswers() {
+  $("#ansFilter").addEventListener("input", drawAnswers);
+  $("#ansSave").addEventListener("click", (e) => busy(e.target, "Saving…", async () => {
+    await api("/api/jobs/answers", { question: $("#ansQ").value, answer: $("#ansA").value });
+    $("#ansQ").value = ""; $("#ansA").value = "";
+    toast("Saved. Forms that ask this will get your answer.");
+    LOADERS.answers();
+  }));
+}
+
 LOADERS.profile = async function () {
+  drawCvStatus();
+  drawStyle();
+  const rh = $("#resumeBody");
+  if (rh && !rh.firstChild) rh.appendChild(resumePicker(""));
   let p = {};
   try { p = (await api("/api/jobs/profile", {})).profile || {}; }
   catch (e) { /* render an empty form */ }
@@ -1571,6 +2467,9 @@ LOADERS.profile = async function () {
     return w;
   };
   const join = (v) => Array.isArray(v) ? v.join(", ") : (v || "");
+  const ch = el("div", "field"); ch.appendChild(el("label", "", "Contact details — company forms ask for these every time"));
+  f.appendChild(ch);
+  CONTACT.forEach(([k, label, hint]) => f.appendChild(fieldRow(k, label, hint, String(p[k] || ""))));
   FIELDS.slice(0, 3).forEach(([k, label, hint]) => f.appendChild(fieldRow(k, label, hint, join(p[k]))));
 
   // employment history: one card per employer, as in the design
@@ -1604,6 +2503,7 @@ LOADERS.profile = async function () {
   f.appendChild(emp);
 
   f.appendChild(fieldRow("locations_ok", FIELDS[3][1], FIELDS[3][2], join(p.locations_ok)));
+  FIELDS.slice(4).forEach(([k, label, hint]) => f.appendChild(fieldRow(k, label, hint, join(p[k]))));
 
   const save = el("button", "btn primary wide", "Save & Synchronize Profile");
   save.addEventListener("click", () => busy(save, "Saving…", async () => {
@@ -1611,6 +2511,7 @@ LOADERS.profile = async function () {
     FIELDS.forEach(([k]) => {
       body[k] = ($("#p_" + k).value || "").split(",").map((s) => s.trim()).filter(Boolean);
     });
+    CONTACT.forEach(([k]) => { body[k] = ($("#p_" + k).value || "").trim(); });
     await api("/api/jobs/profile", body);
     toast("Saved — drafts can now claim these.");
     await refresh(); railCounts(); LOADERS.profile();
@@ -1645,27 +2546,304 @@ LOADERS.profile = async function () {
   side.appendChild(foot);
 };
 
+/* --- Symbolic Synapse ---------------------------------------------------- */
+// The look's two moving parts, and nothing here may throw into the page:
+//   - on the overview, a slowly turning lattice sphere with filaments of
+//     light leaving it, after the hero of symbolicsynapse.co.za, with the
+//     Jobs logo at its heart. Drawn in 2D on one small canvas (no WebGL, no
+//     library), only while the overview is on screen and the window is
+//     visible. Left alone for two minutes it holds still until you move the
+//     mouse or type; with reduced motion it is drawn once and stays still;
+//   - a soft light under the pointer on cards (mouse and pen, not touch).
+const SYN = { canvas: null, ctx: null, raf: 0, last: 0, input: 0,
+              lat: null, fils: null, seen: true, watching: false };
+const SYN_IDLE_MS = 120000;
+const SYN_RGB = { steel: [46, 111, 174], mint: [70, 211, 154], edge: [58, 132, 200] };
+
+function synOn() {
+  return document.documentElement.getAttribute("data-skin") === "synapse";
+}
+function synReduced() {
+  try { return matchMedia("(prefers-reduced-motion: reduce)").matches; }
+  catch (e) { return false; }
+}
+function synStart() {
+  if (!synOn()) return;
+  try { SYN.input = performance.now(); synWatch(); } catch (e) { return; }
+  synKick();
+}
+function synWake() {
+  SYN.input = performance.now();
+  if (!SYN.raf) synKick();
+}
+function synWatch() {
+  if (SYN.watching) return;
+  SYN.watching = true;
+  document.addEventListener("visibilitychange", synKick);
+  window.addEventListener("resize", synKick);
+  ["pointermove", "pointerdown", "keydown", "wheel"].forEach((ev) =>
+    document.addEventListener(ev, synWake, { passive: true }));
+  const ov = document.getElementById("v-overview");
+  if (ov && typeof MutationObserver === "function") {
+    new MutationObserver(synKick).observe(ov, { attributes: true, attributeFilter: ["class"] });
+  }
+  try {
+    if (matchMedia("(hover: hover)").matches) {
+      document.addEventListener("pointermove", synGlow, { passive: true });
+    }
+  } catch (e) { /* no media queries: no light */ }
+}
+function synGlow(e) {
+  if (e.pointerType === "touch" || !e.target || !e.target.closest) return;
+  try {
+    const card = e.target.closest(".card, .role-card, .step");
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    card.style.setProperty("--mx", Math.round(e.clientX - r.left) + "px");
+    card.style.setProperty("--my", Math.round(e.clientY - r.top) + "px");
+  } catch (err) { /* only a light: nothing depends on it */ }
+}
+function synMount() {
+  if (SYN.canvas && SYN.canvas.isConnected) return SYN.canvas;
+  const mark = document.querySelector("#v-overview .syn-mark");
+  if (!mark || typeof mark.insertBefore !== "function") return null;
+  const c = document.createElement("canvas");
+  if (typeof c.getContext !== "function") return null;
+  c.setAttribute("aria-hidden", "true");
+  mark.insertBefore(c, mark.firstChild);
+  SYN.canvas = c;
+  SYN.ctx = c.getContext("2d");
+  if (typeof IntersectionObserver === "function") {
+    new IntersectionObserver((entries) => {
+      SYN.seen = entries.some((x) => x.isIntersecting);
+      synKick();
+    }).observe(c);
+  }
+  return c;
+}
+function synRunnable() {
+  const ov = document.getElementById("v-overview");
+  return synOn() && !!SYN.ctx && !document.hidden && SYN.seen
+    && !!ov && ov.classList.contains("is-on");
+}
+function synKick() {
+  try { synKickNow(); } catch (e) { synStop(); }
+}
+function synKickNow() {
+  if (!synMount() || !synRunnable()) { synStop(); return; }
+  if (synReduced()) { synStop(); synFrame(0, true); return; }
+  if (!SYN.raf) SYN.raf = requestAnimationFrame(synTick);
+}
+function synStop() {
+  if (SYN.raf) cancelAnimationFrame(SYN.raf);
+  SYN.raf = 0;
+}
+function synTick(now) {
+  SYN.raf = 0;
+  if (!synRunnable() || now - SYN.input > SYN_IDLE_MS) return;
+  if (now - SYN.last >= 50) {              // it moves slowly: 20 frames a second is smooth
+    SYN.last = now;
+    try { synFrame(now, false); } catch (e) { return; }
+  }
+  SYN.raf = requestAnimationFrame(synTick);
+}
+function synUnit(p) {
+  const l = Math.hypot(p[0], p[1], p[2]) || 1;
+  return [p[0] / l, p[1] / l, p[2] / l];
+}
+// The site's lattice: hexagons (and twelve pentagons) on a sphere — the dual
+// of an icosahedron split twice. 320 nodes, 480 edges, built once.
+function synLattice() {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t],
+             [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map(synUnit);
+  let f = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4],
+           [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8],
+           [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  for (let s = 0; s < 2; s++) {
+    const mid = new Map(), next = [];
+    const m = (a, b) => {
+      const k = a < b ? a + "," + b : b + "," + a;
+      if (!mid.has(k)) {
+        v.push(synUnit([(v[a][0] + v[b][0]) / 2, (v[a][1] + v[b][1]) / 2, (v[a][2] + v[b][2]) / 2]));
+        mid.set(k, v.length - 1);
+      }
+      return mid.get(k);
+    };
+    f.forEach(([a, b, c]) => {
+      const ab = m(a, b), bc = m(b, c), ca = m(c, a);
+      next.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+    });
+    f = next;
+  }
+  const nodes = f.map(([a, b, c]) => synUnit([v[a][0] + v[b][0] + v[c][0],
+    v[a][1] + v[b][1] + v[c][1], v[a][2] + v[b][2] + v[c][2]]));
+  const owner = new Map(), edges = [];
+  f.forEach((tri, i) => {
+    for (let k = 0; k < 3; k++) {
+      const a = tri[k], b = tri[(k + 1) % 3], key = a < b ? a + "," + b : b + "," + a;
+      if (owner.has(key)) edges.push([owner.get(key), i]); else owner.set(key, i);
+    }
+  });
+  return { nodes, edges };
+}
+// filaments leave the sphere's sides and drift outwards; the same ones every
+// time (a fixed seed), so the picture is steady between visits
+function synFilaments(n) {
+  let s = 20261015;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const right = i % 2 === 0;
+    const a = (right ? 0.32 : Math.PI - 0.32) + (rnd() - 0.5) * (right ? 1.1 : -1.1);
+    out.push({ a, reach: 0.5 + rnd() * 0.5, droop: rnd() * 0.75 - 0.15,
+               wave: rnd() * Math.PI * 2, speed: 0.05 + rnd() * 0.07, phase: rnd() });
+  }
+  return out;
+}
+function synBez(u, x0, y0, x1, y1, x2, y2, x3, y3) {
+  const w = 1 - u, a = w * w * w, b = 3 * w * w * u, c = 3 * w * u * u, d = u * u * u;
+  return [a * x0 + b * x1 + c * x2 + d * x3, a * y0 + b * y1 + c * y2 + d * y3];
+}
+function synFrame(now, still) {
+  const c = SYN.canvas, ctx = SYN.ctx;
+  if (!c || !ctx) return;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!SYN.lat) SYN.lat = synLattice();
+  if (!SYN.fils) SYN.fils = synFilaments(12);
+  const t = still ? 3.1 : now / 1000;
+  const mark = c.parentElement;
+  const img = mark && mark.querySelector("img");
+  let halo = 24;
+  try { halo = parseFloat(getComputedStyle(mark).getPropertyValue("--syn-halo")) || 24; } catch (e) {}
+  const cx = w / 2, cy = h / 2;
+  const R = Math.max(20, Math.min(h / 2 - 3, (img ? img.clientWidth / 2 : 32) + halo));
+
+  // a green glow under the sphere, as under the site's mark
+  const glow = ctx.createRadialGradient(cx, cy + R * 0.2, R * 0.2, cx, cy + R * 0.2, R * 1.7);
+  glow.addColorStop(0, "rgba(19, 120, 100, 0.22)");
+  glow.addColorStop(1, "rgba(19, 120, 100, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
+
+  // filaments first: they run behind the sphere — light, then green, then steel
+  ctx.lineCap = "round";
+  SYN.fils.forEach((f) => {
+    const sway = still ? 0 : Math.sin(t * 0.55 + f.wave) * 0.06;
+    const a = f.a + sway;
+    const x0 = cx + Math.cos(a) * R * 0.94, y0 = cy + Math.sin(a) * R * 0.94;
+    const dir = Math.cos(a) >= 0 ? 1 : -1;
+    const room = Math.max(10, (w / 2 - R - 8) * f.reach);
+    const x3 = x0 + dir * room;
+    const y3 = Math.max(6, Math.min(h - 6, y0 + (f.droop + sway) * (h / 2 - 8)));
+    const x1 = x0 + dir * room * 0.32, y1 = y0 + Math.sin(a) * room * 0.18;
+    const x2 = x0 + dir * room * 0.68, y2 = y3 - (f.droop + sway) * 14;
+    const g = ctx.createLinearGradient(x0, y0, x3, y3);
+    g.addColorStop(0, "rgba(230, 250, 255, 0.5)");
+    g.addColorStop(0.4, "rgba(70, 211, 154, 0.32)");
+    g.addColorStop(1, "rgba(46, 111, 174, 0)");
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+    ctx.stroke();
+    if (!still) {                           // a pulse travelling outwards
+      const u = (t * f.speed + f.phase) % 1;
+      const p = synBez(u, x0, y0, x1, y1, x2, y2, x3, y3);
+      const k = Math.sin(Math.PI * u);
+      const rg = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], 7);
+      rg.addColorStop(0, `rgba(230, 250, 255, ${(0.9 * k).toFixed(3)})`);
+      rg.addColorStop(0.35, `rgba(70, 211, 154, ${(0.45 * k).toFixed(3)})`);
+      rg.addColorStop(1, "rgba(70, 211, 154, 0)");
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  // the sphere, turning slowly and tipped towards you; the far side fades
+  const ay = t * 0.16, ax = -0.38;
+  const sy = Math.sin(ay), cyy = Math.cos(ay), sx = Math.sin(ax), cxx = Math.cos(ax);
+  const P = SYN.lat.nodes.map(([x, y, z]) => {
+    const x1 = x * cyy + z * sy, z1 = -x * sy + z * cyy;
+    const y2 = y * cxx - z1 * sx, z2 = y * sx + z1 * cxx;
+    const k = 1 + z2 * 0.1;
+    return [cx + x1 * R * k, cy + y2 * R * k, z2];
+  });
+  const B = 5;
+  const lines = Array.from({ length: B }, () => new Path2D());
+  SYN.lat.edges.forEach(([i, j]) => {
+    const p = P[i], q = P[j];
+    const b = Math.min(B - 1, Math.floor((((p[2] + q[2]) / 2 + 1) / 2) * B));
+    lines[b].moveTo(p[0], p[1]);
+    lines[b].lineTo(q[0], q[1]);
+  });
+  ctx.lineWidth = 1;
+  lines.forEach((path, b) => {
+    const d = (b + 0.5) / B;
+    ctx.strokeStyle = `rgba(${SYN_RGB.edge.join(",")}, ${(0.07 + 0.55 * d * d).toFixed(3)})`;
+    ctx.stroke(path);
+  });
+  const dots = Array.from({ length: B }, () => new Path2D());
+  P.forEach(([x, y, z]) => {
+    const d = (z + 1) / 2;
+    if (d < 0.3) return;                      // the back is lost in the fog
+    const b = Math.min(B - 1, Math.floor(d * B));
+    const r = 0.5 + d * 1.1;
+    dots[b].moveTo(x + r, y);
+    dots[b].arc(x, y, r, 0, Math.PI * 2);
+  });
+  dots.forEach((path, b) => {
+    const d = (b + 0.5) / B;
+    const col = SYN_RGB.steel.map((s, i) => Math.round(s + (SYN_RGB.mint[i] - s) * d));
+    ctx.fillStyle = `rgba(${col.join(",")}, ${(0.2 + 0.8 * d * d).toFixed(3)})`;
+    ctx.fill(path);
+  });
+}
+
+/* "by Symbolic Synapse" as the site's two-tone wordmark: the first word in
+   ice blue, the second in the accent (green here, cyan on the site) */
+function brandLine(host, brand) {
+  if (!host) return;
+  const words = String(brand || "").trim().split(/\s+/).filter(Boolean);
+  host.textContent = "";
+  host.append(el("span", "rs-by", "by "));
+  words.forEach((w, i) => {
+    host.append(el("span", i % 2 ? "rs-b" : "rs-a", w));
+    if (i < words.length - 1) host.append(" ");
+  });
+}
+
 /* --- wiring ------------------------------------------------------------ */
-/* The look: "new" (build 152 on) or "previous", both kept, chosen here and
-   remembered on this computer. The page applies it before the first paint. */
-function currentLook() {
-  try { return localStorage.getItem("agentjo-look") === "previous" ? "previous" : "new"; }
-  catch (e) { return "new"; }
+/* The look. There were two, "new" and "previous", with a switch in the
+   sidebar; they looked almost the same, so the switch went and the previous
+   look is the only one. index.html carries it from the first paint. */
+function currentLook() { return "previous"; }
+function applyLook() {
+  try { localStorage.removeItem("agentjo-look"); } catch (e) { /* nothing saved */ }
+  document.documentElement.setAttribute("data-look", "previous");
 }
-function applyLook(choice) {
-  const look = choice === "previous" ? "previous" : "new";
-  try { localStorage.setItem("agentjo-look", look); } catch (e) { /* not saved */ }
-  if (document.documentElement) document.documentElement.setAttribute("data-look", look);
-}
-function wireLook() {
-  const sel = $("#lookSel");
-  if (!sel) return;
-  sel.value = currentLook();
-  sel.addEventListener("change", (e) => applyLook(e.target.value));
-}
+function wireLook() { applyLook(); }
 
 async function boot() {
   wireLook();
+  synStart();
+  wireCv();
+  wireAnswers();
+  wireInbox();
+  wireDigest();
+  wireUpdates();
+  refreshOpen();
   $$(".nav").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
 
   $("#roleFilter").addEventListener("input", (e) => { S.filter = e.target.value; drawRoleList(); });
@@ -1811,7 +2989,7 @@ async function boot() {
 
   try {
     const m = await api("/api/meta", undefined, "GET");
-    $("#railSub").textContent = `by ${m.brand || "Symbolic Synapse"}`;
+    brandLine($("#railSub"), m.brand || "Symbolic Synapse");
     S.profileReady = !!m.profile_ready;
     // the build the SERVER is running, beside the one this page was built
     // from — when they differ, the page is a cached copy and says so
@@ -1845,6 +3023,8 @@ else boot();
 
 /* --- the last few: nothing the job search can do is left without a door */
 function wireRemaining() {
+  wireLearning();
+  wireFinder();
   $("#ovCycle").addEventListener("click", async (e) => {
     let x;
     try { x = await followRun(e.target, "/api/jobs/cycle"); }
@@ -1913,10 +3093,422 @@ async function drawSites() {
   });
 }
 
+/* --- getting better with every application (agent/playbooks.py) --------- */
+const OUTCOME_SAYS = { filled: "filled", submitted: "submitted", needs_answer: "needed you",
+                       unknown_form: "stopped", needs_login: "wanted a sign-in",
+                       needs_captcha: "had a captcha", closed: "closed", apply_by_email: "email only",
+                       failed: "failed" };
+async function drawLearning() {
+  const host = $("#learnSites");
+  if (!host) return;
+  let d;
+  try { d = await api("/api/jobs/portal/learning"); } catch (e) { return; }
+  const tot = d.totals || {}, rec = d.recent || {};
+  const st = $("#learnStats");
+  st.innerHTML = "";
+  const stat = (big, label, sub) => {
+    const b = el("div", "learn-stat");
+    b.append(el("b", "", String(big)), el("span", "", label));
+    if (sub) b.appendChild(el("small", "muted", sub));
+    return b;
+  };
+  st.append(
+    stat(tot.sites || 0, "sites it knows",
+         tot.routes ? `${tot.routes} with a known way to the form` : "learned by applying"),
+    stat(tot.labels || 0, "labels learned", "boxes it now recognises"),
+    stat(rec.last ? `${rec.last_without_you}/${rec.last}` : "—", "forms finished without you",
+         rec.before ? `the ${rec.before} before: ${rec.before_without_you}/${rec.before}` : "of the latest applications"),
+    stat(rec.last ? rec.last_turns : "—", "engine steps per form",
+         rec.before ? `the ${rec.before} before: ${rec.before_turns}` : "fewer as it learns"));
+  host.innerHTML = "";
+  const sites = d.sites || [];
+  if (!sites.length) {
+    host.appendChild(el("p", "muted",
+      "Nothing yet. It learns a site the first time it fills a form there."));
+  }
+  sites.slice(0, 12).forEach((s) => {
+    const row = el("div", "learn-site");
+    const head = el("div", "learn-site-head");
+    const name = el("span", "site-name", s.site);
+    name.title = s.site;
+    head.appendChild(name);
+    const forget = el("button", "btn sm ghost", "Forget");
+    forget.title = "Forget what this site taught it. The next application starts fresh.";
+    forget.addEventListener("click", () => {
+      if (!confirm(`Forget what ${s.site} taught it?`)) return;
+      busy(forget, "…", async () => {
+        await api("/api/jobs/portal/learning/forget", { site: s.site });
+        toast(`Forgot ${s.site}.`);
+        drawLearning();
+      });
+    });
+    head.appendChild(forget);
+    row.appendChild(head);
+    const runs = s.runs ? `${s.runs} application${s.runs === 1 ? "" : "s"}` : "learned from another site's form";
+    const last = OUTCOME_SAYS[s.last_outcome] || s.last_outcome || "";
+    row.appendChild(el("div", "learn-meta", [runs, s.ats, last ? `last: ${last}` : ""].filter(Boolean).join(" · ")));
+    const bits = [];
+    if ((s.route || []).length) bits.push("to the form: " + s.route.map((x) => `“${x}”`).join(" → "));
+    if ((s.next || []).length) bits.push("next: " + s.next.map((x) => `“${x}”`).join(", "));
+    if (s.labels) bits.push(`${s.labels} label${s.labels === 1 ? "" : "s"}`);
+    (s.blocks || []).forEach((b) => bits.push(b === "needs_login" ? "asks for a sign-in"
+      : b === "needs_captcha" ? "shows a captcha" : b));
+    if (bits.length) row.appendChild(el("div", "site-steps", bits.join(" · ")));
+    if ((s.turns || []).length > 1) {
+      row.appendChild(el("div", "learn-trend", "engine steps, application by application: "
+        + s.turns.join(" → ")));
+    }
+    (s.notes || []).forEach((n) => row.appendChild(el("div", "learn-note", n)));
+    host.appendChild(row);
+  });
+  const ex = d.explore || {};
+  $("#exOn").checked = !!ex.on;
+  $("#exTurns").value = ex.turns ?? 12;
+  $("#exTurns").disabled = !ex.on;
+}
+
+function wireLearning() {
+  const on = $("#exOn"), turns = $("#exTurns");
+  if (!on || on.dataset.wired) return;
+  on.dataset.wired = "1";
+  const save = async () => {
+    const n = Math.max(0, Math.min(40, parseInt(turns.value || "0", 10) || 0));
+    turns.value = n;
+    await api("/api/jobs/auto", { explore: on.checked, explore_turns: n });
+    turns.disabled = !on.checked;
+  };
+  on.addEventListener("change", async () => {
+    try {
+      await save();
+      toast(on.checked ? "The engine may work out sites it doesn't know."
+                       : "Only what it already knows: a site it doesn't know is left to you.");
+    } catch (e) { toast(e.message, "bad"); }
+  });
+  turns.addEventListener("change", () => save().catch((e) => toast(e.message, "bad")));
+}
+
+/* --- the job board behind a careers page (boards.find_boards) ------------- */
+function drawFinder(x) {
+  const host = $("#finderOut");
+  host.innerHTML = "";
+  host.appendChild(el("p", (x.boards || []).length ? "" : "muted", x.message || ""));
+  (x.boards || []).forEach((b) => {
+    const row = el("div", "finder-row");
+    const body = el("div");
+    const n = b.found || 0;
+    body.append(el("div", "item-t", b.name),
+      el("div", "item-m", `${b.system} · ${n} role${n === 1 ? "" : "s"} listed now`
+        + ((b.sample || []).length ? ` · e.g. ${b.sample.slice(0, 2).join(", ")}` : "")));
+    row.appendChild(body);
+    const add = el("button", "btn sm" + (b.added ? " ghost" : " primary"),
+                   b.added ? "Already a source" : "Add as a source");
+    add.disabled = !!b.added;
+    add.addEventListener("click", () => busy(add, "Adding…", async () => {
+      await api("/api/jobs/sources", { name: b.name, url: b.url, kind: b.kind });
+      add.textContent = "Added";
+      add.disabled = true;
+      toast(`Added ${b.name}. Its roles are read with every search.`);
+      if (LOADERS.sources) LOADERS.sources();
+    }));
+    row.appendChild(add);
+    host.appendChild(row);
+  });
+  const looked = x.looked_at || [];
+  if (looked.length > 1) {
+    host.appendChild(el("p", "muted", "Looked at: "
+      + looked.map((l) => String(l.url || "").replace(/^https?:\/\//, "")).join(", ")));
+  }
+}
+
+function wireFinder() {
+  const go = $("#finderGo"), box = $("#finderUrl");
+  if (!go || go.dataset.wired) return;
+  go.dataset.wired = "1";
+  const run = () => {
+    const url = box.value.trim();
+    if (!url) { toast("Paste a company's careers page first.", "warn"); return; }
+    busy(go, "Looking…", async () => drawFinder(await api("/api/jobs/sources/explore", { url })));
+  };
+  go.addEventListener("click", run);
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+}
+
+/* --- how much it does without you ----------------------------------------- */
+const LEVEL_NAMES ={ draft: "Draft only", prepare: "Prepare", email: "Send email", full: "Full" };
+async function drawLevels() {
+  const host = $("#levels");
+  if (!host) return;
+  let d;
+  try { d = await api("/api/jobs/autonomy"); } catch (e) { return; }
+  host.innerHTML = "";
+  d.levels.forEach((lv) => {
+    const b = el("button", "level" + (lv.id === d.level ? " is-on" : ""));
+    b.type = "button"; b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", lv.id === d.level ? "true" : "false");
+    b.append(el("b", "", LEVEL_NAMES[lv.id] || lv.id), el("span", "", lv.says));
+    b.addEventListener("click", () => busy(b, "Setting…", async () => {
+      await api("/api/jobs/autonomy", { level: lv.id });
+      toast(`${LEVEL_NAMES[lv.id]}: ${lv.says}`);
+      await LOADERS.auto();
+    }));
+    host.appendChild(b);
+  });
+  $("#levelNote").textContent = d.level === "custom"
+    ? "Custom: the rules below have been set by hand. Pick a level to go back to one."
+    : "Every level keeps the checks: minimum fit, no invented claims, the daily cap.";
+}
+
+/* --- run reports ------------------------------------------------------------ */
+async function drawRuns() {
+  const host = $("#runReports");
+  if (!host) return;
+  let runs = [];
+  try { runs = (await api("/api/jobs/runs")).runs || []; } catch (e) { return; }
+  host.innerHTML = "";
+  if (!runs.length) { host.appendChild(el("p", "muted", "No runs yet.")); return; }
+  const list = (title, items, fmt) => {
+    if (!items || !items.length) return null;
+    const box = el("div"); box.appendChild(el("h5", "", `${title} (${items.length})`));
+    const ul = el("ul"); items.forEach((x) => ul.appendChild(el("li", "", fmt(x)))); box.appendChild(ul);
+    return box;
+  };
+  runs.slice(0, 20).forEach((r, i) => {
+    const det = el("details", "run");
+    if (i === 0) det.open = true;
+    const sum = el("summary");
+    sum.append(el("span", "run-when", `${r.at} · ${r.kind === "cycle" ? "full cycle" : "auto-apply"}` +
+                 (r.level ? ` · ${LEVEL_NAMES[r.level] || r.level}` : "")),
+               el("span", "run-sum", r.summary || r.error || "Nothing happened."));
+    det.appendChild(sum);
+    const body = el("div", "run-body");
+    const who = (x) => [x.title, x.company].filter(Boolean).join(" @ ");
+    [list("Sent" + (r.dry_run ? " (rehearsal, nothing left)" : ""), r.sent, (x) => `${who(x)} → ${x.to || ""}`),
+     list("Forms filled for you to finish", r.prepared, (x) => who(x) +
+       (x.needs_you && x.needs_you.length ? ` — you answer: ${x.needs_you.join("; ")}` : "")),
+     list("What its forms taught it", r.learned, (x) => x),
+     list("Held", r.held, (x) => `${who(x)}: ${x.reason}`),
+     list("Errors", Object.entries(r.errors || {}), ([e, n]) => (n > 1 ? `${n}× ` : "") + e),
+    ].forEach((b) => b && body.appendChild(b));
+    if (r.waiting_questions) {
+      const w = el("p", "", `${r.waiting_questions} question(s) waiting on you under Answers.`);
+      w.style.cursor = "pointer"; w.addEventListener("click", () => show("answers"));
+      body.appendChild(w);
+    }
+    if (!body.childNodes.length) body.appendChild(el("p", "muted", "Nothing to report."));
+    det.appendChild(body);
+    host.appendChild(det);
+  });
+}
+
+/* --- replies from your inbox (agent/inbox.py) ------------------------------ */
+const REPLY_KIND = { interview: "interview", offer: "offer", rejection: "turned down",
+                     reply: "reply", ack: "received" };
+async function drawInbox() {
+  const host = $("#ibRecent");
+  if (!host) return;
+  let d;
+  try { d = await api("/api/jobs/inbox"); } catch (e) { return; }
+  $("#ibOn").checked = !!d.settings.enabled;
+  $("#ibHost").value = d.settings.imap_host || "";
+  $("#ibHost").placeholder = d.imap_guess ? `IMAP server (default ${d.imap_guess})` : "IMAP server, e.g. imap.gmail.com";
+  $("#ibNote").textContent = d.mail_ready
+    ? "Or save reply emails as .eml files in " + d.folder + " — they're read too."
+    : "Set up email sending first: reading uses the same login. Or save reply emails as .eml files in " + d.folder + ".";
+  host.innerHTML = "";
+  if (!d.recent.length) { host.appendChild(el("p", "muted", "No replies matched to your applications yet.")); return; }
+  d.recent.forEach((r) => {
+    const row = el("div", "rep");
+    row.append(el("span", "rep-kind " + r.kind, REPLY_KIND[r.kind] || r.kind),
+               el("div", "", `${r.role} @ ${r.company} — ${r.subject || ""}`),
+               el("span", "rep-when", r.at || ""));
+    host.appendChild(row);
+  });
+}
+/* --- the weekly digest (agent/digest.py) ------------------------------------ */
+async function drawDigest(showPreview) {
+  let d;
+  try { d = await api("/api/jobs/digest"); } catch (e) { return; }
+  $("#dgOn").checked = !!d.settings.enabled;
+  $("#dgTo").value = d.settings.to || "";
+  const sel = $("#dgDay");
+  if (!sel.options.length) d.days.forEach((n, i) => { const o = el("option", "", "Every " + n); o.value = i; sel.appendChild(o); });
+  sel.value = String(d.settings.weekday || 0);
+  if (showPreview) {
+    const pre = $("#dgText");
+    pre.hidden = false;
+    pre.textContent = `Subject: ${d.preview.subject}\n\n${d.preview.text}`;
+  }
+}
+function wireDigest() {
+  const save = () => api("/api/jobs/digest", { enabled: $("#dgOn").checked,
+    to: $("#dgTo").value.trim(), weekday: Number($("#dgDay").value) });
+  $("#dgOn").addEventListener("change", async () => { await save();
+    toast($("#dgOn").checked ? `Weekly digest on: ${$("#dgDay").selectedOptions[0].text.toLowerCase()}, with the morning run.` : "Weekly digest off."); });
+  $("#dgTo").addEventListener("change", save);
+  $("#dgDay").addEventListener("change", save);
+  $("#dgPreview").addEventListener("click", (e) => busy(e.target, "Building…", async () => { await save(); await drawDigest(true); }));
+  $("#dgSend").addEventListener("click", (e) => busy(e.target, "Sending…", async () => {
+    await save();
+    const x = await api("/api/jobs/digest/send", {});
+    toast(`Digest sent to ${x.to}.`);
+  }));
+}
+
+/* --- updates (agent/updater.py) --------------------------------------------- */
+async function drawBackups() {
+  const host = $("#backupBody");
+  if (!host) return;
+  let st = {};
+  try { st = await api("/api/jobs/backups"); } catch (e) { return; }
+  host.innerHTML = "";
+  const row = el("div", "actions");
+  const make = el("button", "btn primary", "Back up now");
+  make.addEventListener("click", () => busy(make, "Backing up…", async () => {
+    const x = await api("/api/jobs/backups", {});
+    window.location.href = x.url;
+    toast(`Backed up ${x.files} file(s).`); drawBackups();
+  }));
+  const pick = el("input"); pick.type = "file"; pick.accept = ".zip"; pick.hidden = true;
+  const rest = el("button", "btn", "Restore from a backup…");
+  rest.addEventListener("click", () => pick.click());
+  pick.addEventListener("change", () => {
+    const file = pick.files && pick.files[0];
+    pick.value = "";
+    if (!file) return;
+    if (!confirm(`Restore from ${file.name}? What's here now is backed up first.`)) return;
+    busy(rest, "Restoring…", async () => {
+      const data = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result); r.onerror = () => rej(new Error("Couldn't read that file."));
+        r.readAsDataURL(file);
+      });
+      const x = await api("/api/jobs/backups/restore", { data });
+      alert(x.message);
+    });
+  });
+  row.append(make, rest, pick);
+  host.appendChild(row);
+  (st.backups || []).slice(0, 5).forEach((b) => {
+    const a = el("a", "muted backup-link", `${b.at} — ${(b.size / 1024).toFixed(0)} KB`);
+    a.href = "/api/jobs/backups/file?name=" + encodeURIComponent(b.filename);
+    host.appendChild(a);
+  });
+  if (!(st.backups || []).length) host.appendChild(el("p", "muted", "No backups yet."));
+}
+
+async function drawPhone() {
+  const host = $("#phoneBody");
+  if (!host) return;
+  let st;
+  try { st = await api("/api/phone"); } catch (e) { host.textContent = "Couldn't read it."; return; }
+  host.innerHTML = "";
+  const row = el("div", "actions");
+  const tog = el("button", "btn" + (st.enabled ? "" : " primary"), st.enabled ? "Turn off" : "Turn on");
+  tog.addEventListener("click", () => busy(tog, "…", async () => {
+    await api("/api/phone", { enabled: !st.enabled }); drawPhone();
+  }));
+  row.appendChild(tog);
+  if (st.enabled) {
+    const rot = el("button", "btn sm ghost", "New key");
+    rot.title = "The old link stops working at once — use it if the link was seen by anyone else.";
+    rot.addEventListener("click", () => {
+      if (!confirm("Make a new key? Your phone's current link stops working; scan again.")) return;
+      busy(rot, "…", async () => { await api("/api/phone/rotate", {}); drawPhone(); });
+    });
+    row.appendChild(rot);
+  }
+  host.appendChild(row);
+  if (st.error) host.appendChild(el("p", "prep-gap", st.error));
+  if (!st.enabled) return;
+  if (!(st.links || []).length) {
+    host.appendChild(el("p", "muted", "This computer has no network address a phone can reach."));
+    return;
+  }
+  const grid = el("div", "phone-links");
+  st.links.forEach((l) => {
+    const c = el("div", "phone-link");
+    const q = el("div", "phone-qr");
+    q.innerHTML = l.qr || "";                    // SVG from our own encoder (agent/qr.py)
+    c.appendChild(q);
+    c.appendChild(el("b", "", l.kind === "tailscale" ? "Anywhere, via Tailscale" : "On this Wi-Fi"));
+    c.appendChild(el("p", "muted", l.kind === "tailscale"
+      ? "Encrypted end to end — works away from home."
+      : "Same network only, and not encrypted on it: fine at home, not on shared Wi-Fi."));
+    const copy = el("button", "btn sm", "Copy link");
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(l.url); toast("Copied — it contains the key; send it only to yourself."); }
+      catch (e) { prompt("Copy this link:", l.url); }
+    });
+    c.appendChild(copy);
+    grid.appendChild(c);
+  });
+  host.appendChild(grid);
+  host.appendChild(el("p", "muted", "Scan with your phone's camera. Windows may ask to let Python " +
+    "through the firewall on private networks — allow it, or the phone can't connect."));
+}
+
+async function drawUpdates() {
+  let st;
+  try { st = await api("/api/updates"); } catch (e) { return; }
+  $("#upSrc").value = st.source || "";
+  $("#upBack").hidden = !st.can_roll_back;
+  $("#upNote").textContent = `This copy: ${st.build}.` + (st.can_verify ? ""
+    : " It has no signing key yet, so it can't install updates (see tools/make_release.py).") +
+    (st.last_install && st.last_install.to ? ` Last update: ${st.last_install.from} → ${st.last_install.to}.` : "");
+}
+function wireUpdates() {
+  const saveSrc = () => api("/api/updates/source", { source: $("#upSrc").value.trim() });
+  $("#upSrc").addEventListener("change", saveSrc);
+  $("#upCheck").addEventListener("click", (e) => busy(e.target, "Checking…", async () => {
+    await saveSrc();
+    const c = await api("/api/updates/check", {});
+    $("#upGo").hidden = !c.newer;
+    $("#upNote").textContent = c.newer ? `New: ${c.latest} (you have ${c.current}). ${c.notes || ""}`
+                                       : `Up to date: ${c.current}.`;
+  }));
+  $("#upGo").addEventListener("click", (e) => {
+    if (!confirm("Install the update? It's checked against your signing key first; the files it replaces are kept so you can roll back.")) return;
+    busy(e.target, "Downloading and checking…", async () => {
+      const x = await api("/api/updates/install", {});
+      $("#upNote").textContent = `${x.message} (${x.from} → ${x.to}${x.packages ? "; " + x.packages : ""})`;
+      $("#upGo").hidden = true; $("#upBack").hidden = false;
+      toast("Updated. Restart Agent Jo Jobs to run the new version.");
+    });
+  });
+  $("#upBack").addEventListener("click", (e) => {
+    if (!confirm("Roll back the last update?")) return;
+    busy(e.target, "Rolling back…", async () => {
+      const x = await api("/api/updates/rollback", {});
+      $("#upNote").textContent = x.message; $("#upBack").hidden = true;
+      toast("Rolled back. Restart Agent Jo Jobs.");
+    });
+  });
+}
+
+function wireInbox() {
+  const save = () => api("/api/jobs/inbox", { enabled: $("#ibOn").checked, imap_host: $("#ibHost").value.trim() });
+  $("#ibOn").addEventListener("change", async () => { await save(); toast($("#ibOn").checked ? "Replies will be read with every full cycle." : "Inbox reading off."); });
+  $("#ibHost").addEventListener("change", save);
+  $("#ibCheck").addEventListener("click", (e) => busy(e.target, "Reading replies…", async () => {
+    await save();
+    const x = await api("/api/jobs/inbox/check", {});
+    const n = (x.found || []).length;
+    toast(n ? `${n} repl(y/ies) to your applications: ` + x.found.slice(0, 3).map((f) =>
+      `${f.company} (${REPLY_KIND[f.kind] || f.kind}${f.moved_to ? " → " + f.moved_to : ""})`).join(", ")
+      : `Checked ${x.checked} new message(s); none were about your applications.`, n ? "" : "warn");
+    if (x.warning) toast(x.warning, "warn");
+    await drawInbox(); await refresh();
+  }));
+}
+
 const _prevAuto = LOADERS.auto;
 LOADERS.auto = async function () {
   await _prevAuto();
+  drawLevels();
+  drawEmail();
+  drawRuns();
   drawSites();
+  drawLearning();
   const host = $("#portalHistory");
   host.innerHTML = "";
   try {

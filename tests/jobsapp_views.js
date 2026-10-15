@@ -68,6 +68,13 @@ const tick = () => new Promise((r) => realSetTimeout(r, 0));
 
 // the server's real payload shapes, as observed from the running app
 const PAYLOAD = {
+  "/api/updates": {build: "2026-10-06 21:00 UTC", source: "", can_verify: false, can_roll_back: false, last_install: {}},
+  "/api/jobs/digest": {settings: {enabled: false, to: "t@x.com", weekday: 0}, days: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], preview: {subject: "s", text: "t", empty: false}},
+  "/api/jobs/inbox": {settings: {enabled: false, imap_host: ""}, folder: "/x/replies", mail_ready: true, imap_guess: "imap.gmail.com", recent: [{kind: "interview", role: "BI Lead", company: "Zeta", subject: "Interview", at: "2026-10-05"}]},
+  "/api/jobs/autonomy": {level: "prepare", levels: [{id: "draft", says: "d"}, {id: "prepare", says: "p"}, {id: "email", says: "e"}, {id: "full", says: "f"}]},
+  "/api/jobs/runs": {runs: [{at: "2026-10-06 07:00 UTC", kind: "cycle", level: "prepare", summary: "3 new role(s) found; 0 sent", sent: [], prepared: [{title: "BI Lead", company: "Zeta", needs_you: ["Driver's licence?"]}], held: [{title: "Analyst", company: "Beta", reason: "fit 60% is below your threshold"}], errors: {}, waiting_questions: 1}]},
+  "/api/jobs/answers/open": {open: [{question: "Do you have a driver's licence?", roles: ["Data Engineer @ Acme", "BI Lead @ Zeta"], sensitive: false}]},
+  "/api/jobs/answers": {answers: [{id: 1, question: "Notice period", answer: "30 days", uses: 2, reuse: true, sensitive: false}]},
   "/api/meta": { app: "Agent Jo Jobs", build: "x", brand: "Symbolic Synapse",
                  profile_ready: false, profile_note: "thin", engines: ["Local"],
                  default_engine: "Auto" },

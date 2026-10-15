@@ -47,6 +47,9 @@ UNKNOWN_FORM = "unknown_form"
 FILLED = "filled"
 SUBMITTED = "submitted"
 FAILED = "failed"
+# the advert said the role is closed; or it wants an email, not a form
+CLOSED = "closed"
+APPLY_BY_EMAIL = "apply_by_email"
 
 
 def _dir() -> Path:
@@ -186,8 +189,9 @@ _ANSWER_SYSTEM = (
     "You are filling in a job application form on behalf of a candidate.\n"
     "You are given the candidate's PROFILE, the ROLE, and the form's "
     "QUESTIONS.\n\n"
-    "Answer each question using ONLY what is in the PROFILE. If the profile "
-    "does not support an answer, return an empty string for that question — "
+    "Answer each question using ONLY what is in the PROFILE and CV_EXCERPTS "
+    "(sections of the candidate's own CV). If they do "
+    "not support an answer, return an empty string for that question — "
     "an unanswered question is fine; an invented one is not. Never state a "
     "tool, an employer, a qualification or a number of years that is not in "
     "the profile.\n\n"
@@ -201,6 +205,21 @@ _ANSWER_SYSTEM = (
 
 def answer_questions(role: dict, profile: dict, questions: list,
                      brain, model=None) -> list:
+    out = _answer_questions(role, profile, questions, brain, model)
+    try:
+        from . import answerbank
+        r = role or {}
+        label = " @ ".join(str(x) for x in (r.get("title"), r.get("company")) if x)
+        for a in out:
+            if not a.get("answer"):
+                answerbank.ask(a["question"], label, str(r.get("key", "")))
+    except Exception:
+        pass
+    return out
+
+
+def _answer_questions(role: dict, profile: dict, questions: list,
+                      brain, model=None) -> list:
     """Answer a form's free-text questions from the profile, and nothing else.
 
     Portal forms ask things no field table can cover — "why this role", "how
@@ -210,12 +229,37 @@ def answer_questions(role: dict, profile: dict, questions: list,
     what a covering letter wouldn't be allowed to.
     """
     questions = [q for q in (questions or []) if str(q).strip()]
-    if not questions or brain is None:
-        return [{"question": q, "answer": "", "source": "blank",
-                 "why": "no engine available to answer it"} for q in questions]
+    # answers you've given before come first, word for word
+    saved_out = []
+    try:
+        from . import answerbank
+        rest = []
+        for q in questions:
+            hit = answerbank.lookup(q)
+            if hit:
+                saved_out.append({"question": q, "answer": hit["answer"],
+                                  "source": "engine", "saved": True,
+                                  "why": "your answer from a previous application"})
+            else:
+                rest.append(q)
+        questions = rest
+    except Exception:
+        pass
+    if not questions:
+        return saved_out
+    if brain is None:
+        return saved_out + [{"question": q, "answer": "", "source": "blank",
+                 "why": "no engine available to answer it — answer it "
+                        "once under Answers and it's remembered"} for q in questions]
     from . import jobscout
-    payload = json.dumps({"PROFILE": profile or {}, "ROLE": role or {},
-                          "QUESTIONS": questions}, default=str)[:12000]
+    try:
+        from . import cvstore
+        cv = cvstore.excerpts(" ".join(questions) + " " + str((role or {}).get("title", "")), k=5)
+    except Exception:
+        cv = ""
+    payload = json.dumps({"PROFILE": profile or {}, "CV_EXCERPTS": cv,
+                          "ROLE": role or {}, "QUESTIONS": questions},
+                         default=str)[:14000]
     try:
         kw = {"model": model} if model else {}
         raw = brain.chat([{"role": "user", "content": payload}],
@@ -225,20 +269,20 @@ def answer_questions(role: dict, profile: dict, questions: list,
                        if getattr(b, "type", "") == "text")
         data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
     except Exception as exc:
-        return [{"question": q, "answer": "", "source": "blank",
+        return saved_out + [{"question": q, "answer": "", "source": "blank",
                  "why": f"couldn't answer: {type(exc).__name__}"}
                 for q in questions]
 
     by_q = {str(a.get("question", "")).strip().lower():
             str(a.get("answer", "")).strip()
             for a in (data.get("answers") or []) if isinstance(a, dict)}
-    out = []
+    out = list(saved_out)
     for q in questions:
         ans = by_q.get(str(q).strip().lower(), "")
         if not ans:
             out.append({"question": q, "answer": "", "source": "blank",
-                        "why": "your profile doesn't answer this — type it "
-                               "yourself"})
+                        "why": "nothing you've told it answers this — answer "
+                               "it once under Answers and it's remembered"})
             continue
         check = jobscout.check_draft(ans, role or {})
         if check.get("ok") is False:
@@ -291,6 +335,14 @@ def companion_payload(hints: list, profile: dict = None, role: dict = None) -> d
             if v:
                 known[kind] = v
     r = role or {}
+    try:
+        from . import answerbank
+        have = {str(h.get("label", "")).strip().lower() for h in hints or []
+                if h.get("value")}
+        hints = list(hints or []) + [h for h in answerbank.hints()
+                                     if h["label"].strip().lower() not in have]
+    except Exception:
+        pass
     return {"hints": list(hints or []), "known": known,
             "rules": [[k, pat] for k, pat in FIELD_PATTERNS],
             "sensitive": list(SENSITIVE),
@@ -339,6 +391,15 @@ def paste_pack(answers: list, filled: list) -> str:
     return "\n".join(lines).strip()
 
 
+def _saved_answer(label: str) -> str:
+    try:
+        from . import answerbank
+        hit = answerbank.lookup(label)
+        return hit["answer"] if hit else ""
+    except Exception:
+        return ""
+
+
 def plan(role: dict, profile: dict, fields: list) -> dict:
     """Given the form's fields, work out what can be filled and what can't —
     before touching anything, so a form that can't be completed doesn't get
@@ -347,6 +408,13 @@ def plan(role: dict, profile: dict, fields: list) -> dict:
     for f in fields or []:
         label = f.get("label") or f.get("name") or f.get("id") or ""
         kind = classify_field(label)
+        # what you typed into a form like this one before (agent/answerbank.py)
+        saved = _saved_answer(label) if kind in ("sensitive", "") else None
+        if saved:
+            fill.append({"kind": "saved", "label": label,
+                         "selector": f.get("selector", ""),
+                         "type": f.get("type", "text"), "value": saved})
+            continue
         if kind == "sensitive":
             sensitive.append(label)
             continue
@@ -354,7 +422,7 @@ def plan(role: dict, profile: dict, fields: list) -> dict:
             if f.get("required"):
                 unknown.append(label)
             continue
-        value = answer_for(kind, profile, role)
+        value = answer_for(kind, profile, role) or _saved_answer(label) or ""
         if value:
             fill.append({"kind": kind, "label": label,
                          "selector": f.get("selector", ""),
@@ -408,6 +476,11 @@ def handover_message(state: str, detail: str = "") -> str:
         return ("This form doesn't look like an ATS I can fill reliably"
                 + (f" ({detail})" if detail else "")
                 + ". It's open in the browser for you.")
+    if state == CLOSED:
+        return "The advert says the role is closed" + (f": {detail}" if detail else ".")
+    if state == APPLY_BY_EMAIL:
+        return ("This advert asks for applications by email"
+                + (f", to {detail}" if detail else "") + ", not a form.")
     return detail
 
 
@@ -534,14 +607,43 @@ def readiness(profile: dict) -> dict:
     find that out once here than to abandon twenty half-filled forms."""
     p = profile or {}
     need = {"full_name": "your name", "email": "an email address",
-            "phone": "a phone number", "location": "your location",
-            "cv_path": "a path to your CV file"}
+            "phone": "a phone number", "location": "your location"}
     missing = [label for key, label in need.items()
-               if not str(p.get(key) or "").strip()]
+               if not str(p.get(key) or "").strip()
+               and not (key == "email" and _sending_address())]
     cv = str(p.get("cv_path") or "").strip()
     if cv and not Path(cv).exists():
         missing.append(f"a CV at {cv} (that file isn't there)")
+    elif not cv and not _have_cv_text():
+        # a CV file used to be required by path, which nobody filled in: the
+        # CV you pasted is enough now — a designed PDF of it is made to upload
+        missing.append("your CV (paste or upload it under Your profile)")
     return {"ready": not missing, "missing": missing}
+
+
+def _sending_address() -> str:
+    try:
+        from . import outreach
+        return str(outreach.load_config().get("from_addr") or "")
+    except Exception:
+        return ""
+
+
+def _have_cv_text() -> bool:
+    try:
+        from . import cvstore
+        return bool(cvstore.text().strip())
+    except Exception:
+        return False
+
+
+def with_contact(profile: dict) -> dict:
+    """The profile as a form needs it: your sending address as the email when
+    the profile has none."""
+    p = dict(profile or {})
+    if not str(p.get("email") or "").strip():
+        p["email"] = _sending_address()
+    return p
 
 
 # --------------------------------------------------------------------------- #
@@ -627,7 +729,7 @@ _COMPANION_JS = r"""
     // an answer written for this question beats a rule about questions
     // like it: "why do you want to work here" has its own answer, which the
     // generic cover-letter rule would otherwise hide
-    const answered = similar((h) => h.source === "engine" || h.source === "held");
+    const answered = similar((h) => h.source === "engine" || h.source === "held" || h.source === "saved");
     if (answered) return answered;
     const known = data.known || {};
     const other = OTHER_PERSON.test(label);
@@ -817,9 +919,13 @@ _COMPANION_JS = r"""
     place(x, y);
   };
   const target = (e) => (e.composedPath && e.composedPath()[0]) || e.target;
+  /* while the app itself is working through the form it stays out of the
+     way: the navigator marks the page each time it reads it, and a box that
+     popped up over a list would take the click meant for the list */
+  const quiet = () => { const q = window.__agentJoQuiet || 0; return q > 0 && Date.now() - q < 20000; };
 
   document.addEventListener("mousemove", (e) => {
-    if (!ensureUI()) return;
+    if (quiet() || !ensureUI()) return;
     const el = target(e);
     dot.style.left = e.clientX + "px";
     dot.style.top = e.clientY + "px";
@@ -836,12 +942,31 @@ _COMPANION_JS = r"""
   // a field reached with Tab, or clicked into, gets the same help
   document.addEventListener("focusin", (e) => {
     const el = target(e);
-    if (!isField(el) || !ensureUI()) return;
+    if (quiet() || !isField(el) || !ensureUI()) return;
     clearTimeout(hideTimer);
     if (el === current && box.style.display === "block") return;
     current = el;
     const r = el.getBoundingClientRect();
     show(el, r.left, r.bottom - 8);
+  }, true);
+  /* what you type is saved with its question, so the next form that asks
+     it is filled for you (agent/answerbank.py). Not passwords, not files,
+     not what's already in your profile. */
+  document.addEventListener("change", (e) => {
+    const el = target(e);
+    if (!isField(el) || /^(password|file|hidden)$/i.test(el.type || "")) return;
+    if (quiet()) return;                 // the app typed it, not you
+    if (typeof window.agentJoRemember !== "function") return;
+    const raw = /^select$/i.test(el.tagName)
+      ? ((el.options[el.selectedIndex] || {}).text || "") : el.value;
+    const value = String(raw || "").trim();
+    const label = labelFor(el);
+    if (!value || !label || /^(select|choose|please select)/i.test(value)) return;
+    if (Object.values(data.known || {}).some((k) => String(k).trim() === value)) return;
+    try {
+      window.agentJoRemember({ label, value, url: location.href, for: data.for || "" })
+        .catch(() => {});
+    } catch (err) { /* not this page */ }
   }, true);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && box && box.style.display === "block") {
@@ -852,6 +977,11 @@ _COMPANION_JS = r"""
   const FIELDS = "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), textarea, select";
   const tick = () => {
     try {
+      if (quiet()) {
+        if (pill) pill.style.display = "none";
+        if (box) box.style.display = "none";
+        return;
+      }
       const has = document.querySelector(FIELDS) && innerWidth > 220 && innerHeight > 140;
       if (has && ensureUI()) pill.style.display = dismissed ? "none" : "flex";
       else if (pill) pill.style.display = "none";
@@ -862,13 +992,77 @@ _COMPANION_JS = r"""
   else start();
 
   window.__agentJoCompanion = {
-    update: load,
+    // handed over to you: it's yours to use again at once
+    update: (d) => { window.__agentJoQuiet = 0; load(d); },
     version: 2,
     explain: (el) => ({ label: labelFor(el), hit: lookup(labelFor(el)) }),
   };
   return true;
 })()
 """
+
+
+# What the app itself typed into a form, for a while. The helper in the page
+# saves what YOU type into a form as your answer to its question (it hears
+# the page's change event); the app's own typing raises the same event, so
+# without this an engine's answer would have been filed as yours and reused,
+# word for word and unchecked, on the next form.
+_APP_TYPED: dict = {}
+_APP_TYPED_LOCK = threading.Lock()
+APP_TYPED_KEEP_S = 3 * 3600
+
+
+def note_app_typed(value) -> None:
+    v = " ".join(str(value or "").split())
+    if not v:
+        return
+    with _APP_TYPED_LOCK:
+        now = time.time()
+        _APP_TYPED[v] = now
+        if len(_APP_TYPED) > 2000:
+            for k in [k for k, t in _APP_TYPED.items() if now - t > APP_TYPED_KEEP_S]:
+                _APP_TYPED.pop(k, None)
+
+
+def typed_by_app(value) -> bool:
+    v = " ".join(str(value or "").split())
+    with _APP_TYPED_LOCK:
+        t = _APP_TYPED.get(v)
+    return bool(t) and time.time() - t < APP_TYPED_KEEP_S
+
+
+def _expose_remember(ctx, owner) -> None:
+    """Let the helper in the page hand back what you type, once per browser.
+
+    Every answer you give a form is saved with its question
+    (agent/answerbank.py), so the next form that asks it is filled for you.
+    The page calls window.agentJoRemember({label, value, url, for}) when you
+    leave a field; passwords, file pickers and secrets never reach it."""
+    if ctx is None:
+        return
+    done = getattr(owner, "_remember_ctx", None)
+    if done is None:
+        done = owner._remember_ctx = set()
+    if id(ctx) in done:
+        return
+
+    def _remember(_source, data):
+        try:
+            from . import answerbank
+            d = data or {}
+            if typed_by_app(d.get("value")):
+                return False                   # the app typed it, not you
+            return answerbank.remember(
+                str(d.get("label", ""))[:300], str(d.get("value", ""))[:4000],
+                site=_site_of(str(d.get("url", ""))), role=str(d.get("for", ""))[:200]
+            ).get("ok", False)
+        except Exception:
+            return False
+    try:
+        ctx.expose_binding("agentJoRemember", _remember)
+        done.add(id(ctx))
+    except Exception:
+        pass
 
 
 class PlaywrightDriver:
@@ -878,6 +1072,21 @@ class PlaywrightDriver:
         self.headless = headless
         self._pw = None
         self._ctx = None
+        self._frames: dict = {}            # the frames of each page's last reading
+
+    def snapshot(self, page) -> dict:
+        """The page as the navigator reads it: every frame, every box with
+        its question, every button (agent/navigator.py)."""
+        from . import navigator
+        if len(self._frames) > 40:
+            self._frames.clear()
+        return navigator.browser_snapshot(page, self._frames)
+
+    def act(self, page, action: dict) -> dict:
+        """One action on the page: click, fill, select, check, upload, pick
+        from a list, scroll, back. May return a different page (a new tab)."""
+        from . import navigator
+        return navigator.browser_act(page, self._frames, action)
 
     def open(self, url: str):
         """Open a page, launching the browser only the first time.
@@ -982,7 +1191,7 @@ class PlaywrightDriver:
                 continue
         return False
 
-    def companion(self, page, data) -> bool:
+    def companion(self, page, data) -> bool:  # noqa: C901
         """Put the helper in this page — and in every page, tab and frame the
         application moves on to. Never fatal: a form you can't be helped on
         is still a form you can fill.
@@ -995,6 +1204,7 @@ class PlaywrightDriver:
         payload = data if isinstance(data, dict) else {"hints": list(data or [])}
         script = _COMPANION_JS.replace("__AGENT_JO_DATA__", json.dumps(payload))
         ctx = getattr(page, "context", None)
+        _expose_remember(ctx, self)
         try:
             if ctx is not None:
                 ctx.add_init_script(script)
@@ -1005,10 +1215,18 @@ class PlaywrightDriver:
             ok = bool(page.evaluate(script))
         except Exception:
             pass
+        # every frame, through a locator that can time out: a frame that never
+        # gets going ("about:blank#…", common in ads and captchas) would hang a
+        # plain evaluate for ever, and the browser with it
+        on_root = "(root) => { return " + script.strip().rstrip(";") + "; }"
         for pg in list(getattr(ctx, "pages", None) or [page]):
             for fr in list(getattr(pg, "frames", None) or []):
                 try:
-                    fr.evaluate(script)
+                    loc = fr.locator(":root") if hasattr(fr, "locator") else None
+                    if loc is not None:
+                        loc.evaluate(on_root, timeout=2500)
+                    else:
+                        fr.evaluate(script)
                 except Exception:
                     pass
         return ok
@@ -1071,7 +1289,7 @@ def session_cancel(key: str) -> dict:
 
 
 def _wait_for_person(key: str, driver, page, state: str,
-                     timeout_s: float = 900.0) -> bool:
+                     timeout_s: float = 900.0, cleared=None) -> bool:
     """Stop, ask for help, and carry on once it's handled.
 
     A sign-in page or a captcha used to end the attempt: it reported what it
@@ -1090,7 +1308,10 @@ def _wait_for_person(key: str, driver, page, state: str,
         if s.get("cancel"):
             return False
         try:
-            if page_state(driver.html(page), "") == "":
+            # the navigator reads the page better than a search of its HTML:
+            # an invisible reCAPTCHA badge is in half the forms on the web
+            done = cleared() if cleared is not None else page_state(driver.html(page), "") == ""
+            if done:
                 return True                    # they handled it
         except Exception:
             pass                               # page mid-navigation; look again
@@ -1325,6 +1546,12 @@ class ThreadBoundDriver:
     def fill(self, page, item):
         return self._call(lambda: self._ensure().fill(page, item))
 
+    def snapshot(self, page):
+        return self._call(lambda: self._ensure().snapshot(page), timeout=90)
+
+    def act(self, page, action):
+        return self._call(lambda: self._ensure().act(page, action), timeout=120)
+
     def submit(self, page):
         return self._call(lambda: self._ensure().submit(page))
 
@@ -1515,6 +1742,74 @@ def apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                             wait=wait, session_key=session_key)
 
 
+def _workday_cv(role: dict, profile_data: dict) -> str:
+    """A CV file for Workday to read: yours, or a designed one made now."""
+    p = str((profile_data or {}).get("cv_path") or "")
+    if p and Path(p).is_file():
+        return p
+    try:
+        from . import resume
+        made = resume.make(role, profile_data, fmt="pdf")
+        return made["path"] if made.get("ok") else ""
+    except Exception:
+        return ""
+
+
+def _apply_workday(driver, page, role, profile_data, result, *, submit, brain, model,
+                   wait, session_key) -> dict:
+    """Workday's multi-page application (agent/workday.py), on the browser's
+    own thread, with a sign-in handed to you like any other site's."""
+    from . import workday
+    cv_file = _workday_cv(role, profile_data)     # made before: it uses a browser of its own
+
+    def answers(questions):
+        return answer_questions(role, profile_data, questions, brain, model)
+
+    def go():
+        return workday.run(page, profile_data, role, cv_file=cv_file,
+                           answer_fn=answers if brain is not None else
+                           (lambda qs: [{"question": q, "answer": _saved_answer(q)} for q in qs]),
+                           submit=submit)
+    call = getattr(driver, "_call", None)
+    res = call(go, timeout=600) if call else go()
+    if res["state"] == workday.NEEDS_LOGIN and wait and session_key:
+        if _wait_for_person(session_key, driver, page, NEEDS_LOGIN):
+            _set_session(session_key, state=RUNNING, message="Thanks — carrying on.")
+            result["waited_for_you"] = NEEDS_LOGIN
+            res = call(go, timeout=600) if call else go()
+    state = {workday.FILLED: FILLED, workday.SUBMITTED: SUBMITTED,
+             workday.NEEDS_ANSWER: NEEDS_ANSWER, workday.NEEDS_LOGIN: NEEDS_LOGIN}.get(
+        res["state"], UNKNOWN_FORM)
+    result.update({"ok": bool(res.get("ok")), "state": state, "message": res["message"],
+                   "workday": {"steps": res["steps"], "left": res["left"], "errors": res["errors"]},
+                   "filled": sum(s["filled"] for s in res["steps"])})
+    try:
+        result["screenshot"] = driver.shot(page, "workday")
+    except Exception:
+        pass
+    if state in (NEEDS_ANSWER, UNKNOWN_FORM):
+        try:
+            result["companion"] = _offer_companion(driver, page, companion_hints([], [], driver.fields(page)))
+        except Exception:
+            pass
+    log(result)
+    return result
+
+
+def _explore_settings() -> tuple:
+    """(engine allowed to work out new sites, engine steps per application),
+    from the auto-apply rules."""
+    from . import navigator
+    try:
+        from . import jobscout
+        c = jobscout.auto_config()
+        on = bool(c.get("explore", True))
+        turns = int(c.get("explore_turns", navigator.DEFAULT_TURNS) or 0)
+        return on, (max(0, min(turns, 40)) if on else 0)
+    except Exception:
+        return True, navigator.DEFAULT_TURNS
+
+
 def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                      headless: bool = False, brain=None, model=None,
                      wait: bool = False, session_key: str = "") -> dict:
@@ -1523,6 +1818,22 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
     if not url:
         return {"ok": False, "state": FAILED,
                 "message": "that role has no advert link to open"}
+    from . import navigator
+    away = navigator.never_automated(url)
+    if away:
+        # never automated: their terms forbid it, and an account restricted
+        # for it is a professional profile lost
+        return {"ok": False, "state": UNKNOWN_FORM, "url": url, "role": role.get("title", ""),
+                "message": (f"Applications on {away} are yours to make: automating them breaks "
+                            f"{away}'s terms and gets accounts restricted. Open the advert and "
+                            f"apply there.")}
+    profile_data = with_contact(profile_data)
+    cvp = str(profile_data.get("cv_path") or "")
+    if not cvp or not Path(cvp).is_file():
+        made = _workday_cv(role, profile_data)      # a designed PDF of your CV
+        if made:
+            profile_data = {**profile_data, "cv_path": made}
+    _HELP.profile = profile_data
     ready = readiness(profile_data)
     if not ready["ready"]:
         return {"ok": False, "state": NEEDS_ANSWER,
@@ -1540,6 +1851,19 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
         html = driver.html(page)
         ats = detect_ats(url, html)
         result["ats"] = ats
+
+        # A driver that can read a page properly gets the navigator
+        # (agent/navigator.py): from the advert to the form, through every
+        # page of it, learning the site as it goes. Workday keeps its own
+        # walker. A driver without it (the tests' stand-ins) keeps the form
+        # filler below, unchanged.
+        if ats != "workday" and callable(getattr(driver, "snapshot", None)) \
+                and callable(getattr(driver, "act", None)):
+            _on, turns = _explore_settings()
+            result["site"] = site_brief(url)
+            return navigator.apply(driver, page, role, profile_data, result, submit=submit,
+                                   brain=brain, model=model, wait=wait,
+                                   session_key=session_key, turns=turns)
 
         blocked = page_state(html, url)
         if blocked:
@@ -1565,6 +1889,11 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
                                "screenshot": driver.shot(page, "handover")})
                 log(result)
                 return result
+
+        if ats == "workday":
+            return _apply_workday(driver, page, role, profile_data, result,
+                                  submit=submit, brain=brain, model=model,
+                                  wait=wait, session_key=session_key)
 
         fields = driver.fields(page)
         result["site"] = site_brief(url)       # what this site took last time
@@ -1619,6 +1948,7 @@ def _apply_to_portal(role: dict, profile_data: dict, *, submit: bool = False,
 
         filled, failed = 0, []
         for item in p["fill"]:
+            note_app_typed(item.get("value"))
             if driver.fill(page, item):
                 filled += 1
             else:

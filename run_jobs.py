@@ -41,10 +41,26 @@ def main() -> int:
         print("uvicorn isn't installed. Run install.bat (or ./install.sh).")
         return 1
 
+    # its own data now: on the first start, copy the job search's data across
+    # from Agent Jo's folder, where it used to live (agent/migrate.py)
+    from agent import backup as _bk          # a restore finished at start-up
+    if _bk.apply_pending():
+        print("  Finished restoring your backup.")
+    from agent import migrate
+    _moved = migrate.run()
+    if _moved.get("copied"):
+        print("  Brought your job data over from Agent Jo: "
+              + ", ".join(_moved["copied"]))
     from jobs.server import app, get_memory, start_scheduler
     get_memory()                       # same store the main app uses
     start_scheduler()                  # its own daily run, claimed so it
                                        # never doubles with the main app
+    from agent import phone            # the phone companion, if you turned it on
+    _ph = phone.start()
+    if _ph.get("running"):
+        print(f"  Phone companion on port {_ph['port']} (Engines → Phone companion)")
+    elif _ph.get("error"):
+        print("  Phone companion: " + _ph["error"])
 
     port = _free_port(args.port)
     url = f"http://127.0.0.1:{port}"

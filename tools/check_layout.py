@@ -1,58 +1,27 @@
-"""Measure the layout of both apps in a real browser, on this machine.
+"""Measure the Agent Jo Jobs window in a real browser, on this machine.
 
     python tools/check_layout.py
 
-Each window is drawn from this folder's own HTML, CSS and JavaScript with
-made-up sample data — no server is started, nothing of yours is read, and no
-site is visited — and the things that went wrong once are measured where they
-went wrong: the task feed over the "needs you" rows, the greeting cut off
-under the message box, a phone header that ran off the screen, a drawer under
-its own backdrop, an unreadable link, gold buttons in Glass, a narrow Jobs
-window cut off at the right, a blank drafts pane. Needs Playwright with
-Chromium, as the portal applications do. In the standalone Jobs app, only the
-Jobs window is checked.
+The window is drawn from this folder's own HTML, CSS and JavaScript with
+made-up sample data — no server is started, nothing of yours is read, no site
+is visited — and the things that went wrong once are measured where they went
+wrong: a narrow window cut off at the right, the engine picker out of reach, a
+blank drafts pane. Then the Symbolic Synapse look: its fonts come from the app,
+the green logo is the one shown, the lattice on the overview is drawn and stops
+when it can't be seen, and no view scrolls sideways at any width. Needs
+Playwright with Chromium, as portal applications do.
 """
 from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-MAIN = {
-    "/api/auth/status": {"enabled": False, "authenticated": True},
-    "/api/meta": {"name": "Agent Jo", "configured": True, "backend": "claude",
-                  "brand": "Sample", "default_engine": "Auto", "start_engine": "Auto",
-                  "engines": [{"id": "Auto", "label": "Auto",
-                               "model": "smart routing + failover", "local": False}],
-                  "voice": {"stt": False}},
-    "/api/setup": {"configured": True, "has_key": True, "key_source": "stored", "ollama": True},
-    "/api/stats": {"memories": 12, "skills": 3, "learned": {"playbooks": 1, "lessons": 2},
-                   "tasks": 1, "documents": 4, "conversations": 3, "schedules": 1,
-                   "cost": 1.5, "cost_by_engine": [], "budget": {}},
-    "/api/dashboard": {
-        "at": "06:40 UTC", "notify_level": "important", "hidden_by_level": 0,
-        "dismissed": [], "counts": {"act": 1, "review": 2, "note": 0},
-        "all_clear": False, "running": [],
-        "needs_you": [
-            {"id": "a", "severity": "act", "title": "3 drafts are waiting for you",
-             "detail": "They claim more than your profile.", "panel": "jobs", "why": ""},
-            {"id": "b", "severity": "review", "title": "A report is ready",
-             "detail": "Twelve pages.", "panel": "files", "why": ""},
-            {"id": "c", "severity": "review", "title": "A schedule failed",
-             "detail": "The engine had no credit.", "panel": "schedules", "why": ""}],
-        "tiles": [{"key": k, "label": k.title(), "value": str(v), "sub": "", "tone": "",
-                   "panel": "", "title": ""}
-                  for k, v in (("spend", 4), ("tasks", 3), ("documents", 42), ("memory", 128))],
-        "all_tiles": [], "prefs": {"hidden": [], "order": []}},
-    "/api/conversations": {"conversations": []},
-    "/api/projects": {"projects": []},
-    "/api/tasks": {"tasks": [{"id": "t", "title": "A running task", "status": "running"}]},
-    "/api/schedules": {"schedules": []},
-}
 JOBS = {
     "/api/meta": {"app": "Agent Jo Jobs", "build": "x", "brand": "Sample",
                   "profile_ready": True, "engines": ["Local"], "default_engine": "Auto"},
@@ -72,7 +41,59 @@ JOBS = {
     "/api/jobs/auto/preview": {"sentence": "Nothing would be sent.", "dry_run": True},
     "/api/jobs/sources/suggested": {"suggested": []},
     "/api/jobs/auto/status": {"state": "idle"},
+    "/api/jobs/autonomy": {"level": "draft", "levels": [
+        {"id": "draft", "says": "Finds, scores and drafts; you send."},
+        {"id": "prepare", "says": "Also fills forms, and stops before submit."},
+        {"id": "email", "says": "Sends emailed applications that pass every check."},
+        {"id": "full", "says": "Sends and submits what passes every check."}]},
+    "/api/jobs/inbox": {"settings": {"enabled": False, "imap_host": ""}, "imap_guess": "",
+                        "mail_ready": False, "folder": "replies", "recent": []},
+    "/api/jobs/digest": {"settings": {"enabled": False, "to": "", "weekday": 0},
+                         "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                                  "Saturday", "Sunday"],
+                         "preview": {"subject": "Your week", "text": "Nothing yet."}},
+    # what applying taught it (agent/playbooks.py): sample sites
+    "/api/jobs/portal/learning": {
+        "totals": {"applications": 14, "sites": 3, "routes": 2, "labels": 9, "systems": ["greenhouse"]},
+        "recent": {"last": 10, "last_without_you": 7, "before": 4, "before_without_you": 1,
+                   "last_turns": 1.4, "before_turns": 5.5},
+        "explore": {"on": True, "turns": 12},
+        "sites": [
+            {"site": "careers.sample-company-with-a-long-name.example", "ats": "", "runs": 4,
+             "last_outcome": "filled", "route": ["Start my journey", "Apply manually"],
+             "next": ["proceed to step 2"], "labels": 3, "blocks": [],
+             "notes": ["The form is two pages behind 'Start my journey'."], "turns": [5, 2, 0, 0]},
+            {"site": "boards.greenhouse.io", "ats": "greenhouse", "runs": 8, "last_outcome": "submitted",
+             "route": ["Apply for this job"], "next": [], "labels": 4, "blocks": [], "notes": [],
+             "turns": [3, 1, 0, 0, 0, 0]},
+            {"site": "jobs.sample.example", "ats": "", "runs": 2, "last_outcome": "needs_login",
+             "route": [], "next": [], "labels": 2, "blocks": ["needs_login"], "notes": [],
+             "turns": [4, 1]}]},
+    "/api/jobs/sources/explore": {
+        "ok": True, "url": "https://sample.example/careers",
+        "message": "Found Sample — careers on Greenhouse (12 roles).",
+        "boards": [{"name": "Sample — careers", "kind": "greenhouse", "system": "greenhouse",
+                    "url": "https://boards-api.greenhouse.io/v1/boards/sample/jobs?content=true",
+                    "found": 12, "sample": ["Data Engineer", "Analytics Engineer"], "added": False}],
+        "looked_at": [{"url": "https://sample.example/careers"}, {"url": "https://sample.example/jobs"}]},
 }
+# a role whose form it has been through: what it did and what it learned
+JOBS["/api/jobs"]["roles"][0]["portal"] = {
+    "state": "filled", "message": "Filled in and left for you to read.", "explored": True,
+    "engine_turns": 1, "pages": 2, "filled": 11,
+    "steps": [{"say": "Opened the advert", "by": "rule", "ok": True},
+              {"say": "Declined the cookie banner (“Reject all”)", "by": "rule", "ok": True},
+              {"say": "Pressed “Start my journey” (learned on an earlier application): it opened a new tab",
+               "by": "playbook", "ok": True},
+              {"say": "Filled in first name, last name, email, phone number (local format) and country",
+               "by": "rule", "ok": True},
+              {"say": "Pressed “Proceed to step 2” to the next page", "by": "playbook", "ok": True},
+              {"say": "Typed your salary expectation into “Current CTC”", "by": "engine", "ok": True},
+              {"say": "Refused to press “Submit application”: it would submit the application",
+               "by": "engine", "ok": False}],
+    "learned": ["“Current CTC” means your salary expectation",
+                "Needed the engine 1 time on careers.sample.example, down from 5 last time"]}
+JOBS["/api/jobs"]["roles"][0]["portal_at"] = "2026-10-15 07:12 UTC"
 
 
 def _router(static: Path, data: dict):
@@ -105,85 +126,16 @@ def main() -> int:
         b = p.chromium.launch()
 
         def page(app, w, h, look=None):
-            static = ROOT / ("web/static" if app == "main" else "web_jobs")
+            static = ROOT / "web_jobs"
             pg = b.new_page(viewport={"width": w, "height": h}, color_scheme="dark")
             if look:
                 pg.add_init_script(f"localStorage.setItem('agentjo-look', '{look}')")
-            pg.route("**/*", _router(static, MAIN if app == "main" else JOBS))
+            pg.route("**/*", _router(static, JOBS))
             pg.goto("http://app.test/")
-            if app == "main":
-                pg.wait_for_function(
-                    "document.querySelectorAll('#dashTiles > *').length >= 4", timeout=30000)
-            else:
-                pg.wait_for_function(
-                    "document.getElementById('track').children.length === 6", timeout=30000)
-            time.sleep(1.5)
+            pg.wait_for_function(
+                "document.getElementById('track').children.length === 6", timeout=30000)
+            pg.wait_for_timeout(1500)   # not time.sleep: the page only runs while Playwright does
             return pg
-
-        if (ROOT / "web" / "static" / "index.html").exists():
-            print("Agent Jo")
-            for w, h, label in ((1440, 900, "desktop"), (1280, 800, "laptop"),
-                                (1150, 800, "small laptop, feed minimised")):
-                pg = page("main", w, h)
-                m = pg.evaluate("""() => {
-                  const it = [...document.querySelectorAll('.dash-item')], f = document.getElementById('taskFeed');
-                  const fr = f.getBoundingClientRect(), th = document.getElementById('thread');
-                  return { cover: it.some(e => { const r = e.getBoundingClientRect();
-                             return fr.width > 0 && r.right > fr.left && r.top < fr.bottom && r.bottom > fr.top; }),
-                           clipped: th.scrollHeight - th.clientHeight,
-                           bar: it.length ? getComputedStyle(it[0]).borderLeftWidth : '' }; }""")
-                check(f"{label}: the task feed covers no 'needs you' row", not m["cover"])
-                if w >= 1280:
-                    check(f"{label}: no picture on the welcome in the new look", pg.evaluate(
-                        "() => document.querySelector('#emptyState .empty-mark').getBoundingClientRect().width === 0"))
-                if w >= 1280:
-                    check(f"{label}: the greeting fits above the message box", m["clipped"] <= 1)
-                pg.close()
-            check("the 'needs you' rows have no thick bar", m["bar"] == "1px")
-
-            pg = page("main", 390, 844)
-            m = pg.evaluate("""() => {
-              const vis = (e) => e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
-              const pill = document.getElementById('enginePill').getBoundingClientRect();
-              return { menus: ['menuBtn', 'navToggle'].filter(id => vis(document.getElementById(id))).length,
-                       engineOnScreen: pill.right <= innerWidth && pill.left >= 0,
-                       title: document.getElementById('convTitle').getBoundingClientRect().width,
-                       feed: vis(document.getElementById('taskFeed')) }; }""")
-            check("phone: one menu button", m["menus"] == 1)
-            check("phone: the engine picker is on screen", m["engineOnScreen"])
-            check("phone: the conversation title shows", m["title"] > 20)
-            check("phone: the task feed doesn't cover the page", not m["feed"])
-            pg.click("#navToggle")
-            time.sleep(0.6)
-            check("phone: the open drawer sits above its backdrop", pg.evaluate(
-                "() => !!document.elementFromPoint(60, 300).closest('#sidebar')"))
-            pg.close()
-
-            pg = page("main", 1280, 800)
-            pg.evaluate("openSetup()")
-            time.sleep(0.5)
-            m = pg.evaluate("""() => {
-              const a = document.querySelector('#setupModal a'), btn = document.getElementById('setupSaveBtn');
-              return { link: a ? getComputedStyle(a).color : '', button: getComputedStyle(btn).backgroundImage }; }""")
-            check("the setup dialog's link is readable",
-                  m["link"] and m["link"] not in ("rgb(0, 0, 238)", "rgb(85, 26, 139)"))
-            check("Glass primary buttons aren't gold", "224, 176, 88" not in m["button"])
-            # switching is remembered, and applied before the first paint
-            pg.evaluate("applyLook('previous')")
-            pg.reload()
-            look = pg.evaluate("document.documentElement.getAttribute('data-look')")
-            pg.evaluate("applyLook('new')")
-            check("switching to Previous is remembered across a reload", look == "previous")
-            pg.close()
-
-            print("Agent Jo, previous look")
-            pg = page("main", 1440, 900, look="previous")
-            m = pg.evaluate("""() => ({ look: document.documentElement.getAttribute('data-look'),
-              mark: document.querySelector('#emptyState .empty-mark').getBoundingClientRect().width,
-              bar: getComputedStyle(document.querySelector('.dash-item')).borderLeftWidth })""")
-            check("the previous look is the page as it was", m["look"] == "previous" and m["bar"] == "3px")
-            check("the previous look keeps Agent Jo's picture", m["mark"] > 30)
-            pg.close()
 
         print("Agent Jo Jobs")
         pg = page("jobs", 683, 768)
@@ -191,23 +143,177 @@ def main() -> int:
                                     mainLeft: document.querySelector('.main').getBoundingClientRect().left })""")
         check("a narrow window (half a laptop screen) reflows",
               m["overflow"] <= 1 and m["mainLeft"] < 40)
-        check("the Look switch is reachable in a narrow window", pg.evaluate(
-            "() => document.getElementById('lookSel').getBoundingClientRect().width > 0"))
-        pg.select_option("#lookSel", "previous")
-        pg.reload()
-        pg.wait_for_function("document.getElementById('track').children.length === 6", timeout=30000)
-        m = pg.evaluate("""() => ({ look: document.documentElement.getAttribute('data-look'),
-          sel: document.getElementById('lookSel').value,
-          reach: document.getElementById('lookSel').getBoundingClientRect().width > 0 })""")
-        check("switching the Jobs window to Previous is remembered",
-              m["look"] == "previous" and m["sel"] == "previous")
-        check("the switch is still reachable in the previous look", m["reach"])
+        check("the engine picker is reachable in a narrow window, and no Look switch", pg.evaluate(
+            "() => document.getElementById('engine').getBoundingClientRect().width > 0"
+            " && !document.getElementById('lookSel')"))
         pg.close()
         pg = page("jobs", 1024, 640)
         pg.evaluate("show('drafts')")
-        time.sleep(2.5)
+        # wait the Playwright way: a time.sleep() lets nothing happen, not
+        # even the stubbed replies being served, so the pane was read before
+        # its data arrived and the check passed or failed by luck
+        try:
+            pg.wait_for_function(
+                "document.getElementById('draftDetail').innerText.trim().length > 0",
+                timeout=10000)
+        except Exception:
+            pass
         check("the drafts pane is never blank", "Pick a draft" in pg.evaluate(
             "document.getElementById('draftDetail').innerText"))
+        pg.close()
+
+        # ---- what it did and what it learned ------------------------------- #
+        print("Agent Jo Jobs — getting better with every application")
+        for w, h in ((1440, 900), (390, 844)):
+            pg = page("jobs", w, h)
+            pg.evaluate("show('auto')")
+            try:
+                pg.wait_for_function("document.querySelectorAll('#learnSites .learn-site').length === 3",
+                                     timeout=10000)
+            except Exception:
+                pass
+            m = pg.evaluate("""() => ({
+              stats: document.querySelectorAll('#learnStats .learn-stat').length,
+              sites: document.querySelectorAll('#learnSites .learn-site').length,
+              trend: (document.querySelector('#learnSites .learn-trend') || {}).textContent || '',
+              explore: document.getElementById('exOn').checked && document.getElementById('exTurns').value,
+              over: Math.max(document.scrollingElement.scrollWidth - innerWidth,
+                ...[...document.querySelectorAll('#learnCard *')].map(e => {
+                  const r = e.getBoundingClientRect(), c = document.getElementById('learnCard').getBoundingClientRect();
+                  return r.width ? r.right - c.right : 0; })) })""")
+            check(f"the learning card shows its numbers, its sites and its settings at {w}px",
+                  m["stats"] == 4 and m["sites"] == 3 and "5 → 2 → 0 → 0" in m["trend"]
+                  and m["explore"] == "12" and m["over"] <= 1)
+            pg.evaluate("openRole(S.roles[0])")
+            pg.wait_for_timeout(300)
+            m = pg.evaluate("""() => { const b = document.querySelector('#roleDetail .portal-last');
+              if (!b) return {};
+              b.querySelector('details.trail').open = true;
+              const r = b.getBoundingClientRect();
+              return { steps: b.querySelectorAll('.trail-step').length,
+                       learned: b.querySelectorAll('.learned-list li').length,
+                       chips: [...b.querySelectorAll('.trail-by')].map(x => x.textContent).join(','),
+                       refused: b.querySelectorAll('.trail-step.is-off').length,
+                       over: Math.max(...[...b.querySelectorAll('*')].map(e => e.getBoundingClientRect().right - r.right)) }; }""")
+            check(f"a role shows what its last form attempt did and learned at {w}px",
+                  m.get("steps") == 7 and m.get("learned") == 2 and "learned" in m.get("chips", "")
+                  and "engine" in m.get("chips", "") and m.get("refused") == 1 and m.get("over", 9) <= 1)
+            pg.evaluate("show('sources')")
+            pg.fill("#finderUrl", "sample.example/careers")
+            pg.click("#finderGo")
+            try:
+                pg.wait_for_function("document.querySelectorAll('#finderOut .finder-row').length === 1",
+                                     timeout=10000)
+            except Exception:
+                pass
+            m = pg.evaluate("""() => ({ rows: document.querySelectorAll('#finderOut .finder-row').length,
+              add: (document.querySelector('#finderOut .finder-row .btn') || {}).textContent || '',
+              over: document.scrollingElement.scrollWidth - innerWidth })""")
+            check(f"the board finder offers what it found at {w}px",
+                  m["rows"] == 1 and m["add"] == "Add as a source" and m["over"] <= 1)
+            shots_dir = os.environ.get("AGENT_JOBS_SHOTS", "")   # pictures only when asked for
+            if w == 1440 and shots_dir:
+                shots = Path(shots_dir)
+                shots.mkdir(parents=True, exist_ok=True)
+                pg.evaluate("show('auto')")
+                pg.wait_for_timeout(400)
+                pg.locator("#learnCard").screenshot(path=str(shots / "learning-card.png"))
+                pg.evaluate("show('roles')")
+                pg.wait_for_timeout(900)            # the view draws its list first
+                pg.evaluate("openRole(S.roles[0])")
+                pg.wait_for_selector("#roleDetail .portal-last details.trail", timeout=10000)
+                pg.evaluate("document.querySelector('#roleDetail .portal-last details.trail').open = true")
+                pg.wait_for_timeout(900)            # past the view's fade-in
+                pg.locator("#roleDetail .portal-last").screenshot(path=str(shots / "role-last-attempt.png"))
+            pg.close()
+
+        # ---- the Symbolic Synapse look, in Jobs green ---------------------- #
+        print("Agent Jo Jobs — Symbolic Synapse, in green")
+        asked = []
+        pg = b.new_page(viewport={"width": 1440, "height": 900}, color_scheme="dark")
+        pg.on("request", lambda r: asked.append(r.url))
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.route("**/*", _router(ROOT / "web_jobs", JOBS))
+        pg.goto("http://app.test/")
+        pg.wait_for_function("document.getElementById('track').children.length === 6", timeout=30000)
+        pg.wait_for_timeout(1500)
+        m = pg.evaluate("""async () => { await document.fonts.ready;
+          const btn = document.getElementById('ovCycle');
+          return { skin: document.documentElement.getAttribute('data-skin'),
+                   fonts: [document.fonts.check('600 20px Archivo'),
+                           document.fonts.check('400 14px "IBM Plex Sans"'),
+                           document.fonts.check('400 12px "IBM Plex Mono"')],
+                   accent: getComputedStyle(btn).backgroundColor,
+                   ground: getComputedStyle(document.body).backgroundColor }; }""")
+        woff = [u for u in asked if u.endswith(".woff")]
+        check("the look is Symbolic Synapse, and its typefaces come from the app",
+              m["skin"] == "synapse" and all(m["fonts"]) and woff
+              and all(u.startswith("http://app.test/static/fonts/") for u in woff)
+              and not any("fonts.g" in u for u in asked))
+        check("the accent stays Jobs green on the site's abyss",
+              m["accent"] == "rgb(70, 211, 154)" and m["ground"] == "rgb(3, 6, 11)")
+        icons = [u for u in asked if "/icons/" in u]
+        check("the green logo is the one in the window and the tab",
+              icons and all("v=green1" in u for u in icons)
+              and pg.evaluate("[...document.querySelectorAll('link[rel=icon]')].length") >= 3)
+        m = pg.evaluate("""() => {
+          const c = document.querySelector('#v-overview .syn-mark canvas');
+          if (!c || !c.width) return { drawn: 0 };
+          const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++;
+          const logo = document.querySelector('#v-overview .syn-mark img').getBoundingClientRect();
+          return { drawn: n, running: !!SYN.raf,
+                   logoOnTop: document.elementFromPoint(logo.x + logo.width / 2,
+                     logo.y + logo.height / 2) === document.querySelector('#v-overview .syn-mark img') }; }""")
+        check("the overview's lattice is drawn round the logo, and turns",
+              m["drawn"] > 2000 and m.get("logoOnTop") and m.get("running"))
+        pg.evaluate("SYN.input = performance.now() - 10 * 60 * 1000")
+        pg.wait_for_timeout(300)
+        idle = pg.evaluate("SYN.raf")
+        pg.mouse.move(700, 500)
+        pg.mouse.move(720, 520)
+        pg.wait_for_timeout(300)
+        check("left alone it holds still, and a touch of the mouse wakes it",
+              not idle and pg.evaluate("!!SYN.raf"))
+        pg.evaluate("show('roles')")
+        pg.wait_for_timeout(300)
+        check("it stops when another view is open", not pg.evaluate("SYN.raf"))
+        pg.close()
+
+        # every view, phone-wide to desktop: nothing scrolls sideways
+        wide = []
+        views = ["overview", "roles", "search", "drafts", "auto", "sources", "engines",
+                 "results", "archive", "people", "answers", "profile"]
+        for w, h in ((1440, 900), (1024, 640), (683, 768), (390, 844)):
+            pg = page("jobs", w, h)
+            for v in views:
+                pg.evaluate(f"show('{v}')")
+                pg.wait_for_timeout(250)
+                over = pg.evaluate("""() => Math.max(
+                  document.scrollingElement.scrollWidth - innerWidth,
+                  ...[...document.querySelectorAll('.view.is-on, .main')].map(e => e.scrollWidth - e.clientWidth))""")
+                if over > 1:
+                    wide.append(f"{v}@{w}")
+            pg.close()
+        check(f"no view scrolls sideways, from phone to desktop ({len(views)} views)", not wide)
+        if wide:
+            print("      ", ", ".join(wide))
+        check("no script errors in any view", not errors)
+
+        # less motion asked for: drawn once, then still
+        pg = b.new_page(viewport={"width": 1280, "height": 800}, color_scheme="dark",
+                        reduced_motion="reduce")
+        pg.route("**/*", _router(ROOT / "web_jobs", JOBS))
+        pg.goto("http://app.test/")
+        pg.wait_for_function("document.getElementById('track').children.length === 6", timeout=30000)
+        pg.wait_for_timeout(1200)
+        m = pg.evaluate("""() => { const c = document.querySelector('#v-overview .syn-mark canvas');
+          const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++;
+          return { drawn: n, raf: SYN.raf }; }""")
+        check("with reduced motion the lattice is drawn once and stays still",
+              m["drawn"] > 2000 and not m["raf"])
         pg.close()
         b.close()
     print(f"\n{sum(results)} of {len(results)} checks passed.")

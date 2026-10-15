@@ -1,4 +1,4 @@
-# Getting a Python onto a machine that has none — the one part that cannot
+# Getting a Python onto a machine that has none - the one part that cannot
 # be written in Python. Deliberately small: everything else lives in
 # setup.py, where it can be tested and where failures explain themselves.
 $ErrorActionPreference = "Stop"

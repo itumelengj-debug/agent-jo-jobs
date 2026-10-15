@@ -1,0 +1,109 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Careers - Workday (test copy)</title>
+<style>
+ body{font:14px sans-serif;margin:20px} .fld{margin:8px 0} [role=listbox]{border:1px solid #888;background:#fff;position:absolute}
+ [role=option]{padding:4px 8px;cursor:pointer} [role=option]:hover{background:#def}
+</style></head>
+<body>
+<div id="app"></div>
+<script>
+/* A small imitation of a Workday application, for tests only: the same
+   data-automation-id markers, button drop-downs that open a listbox, a page
+   per step, required-field errors, and a Review page. */
+const P = new URLSearchParams(location.search);
+const TERMS = P.get("terms") !== "0";
+const S = {step: -1, data: {}, submitted: false};
+const STEPS = [
+  {title: "My Information", fields: [
+    {t: "text", id: "legalNameSection_firstName", label: "Given Name(s)", req: true},
+    {t: "text", id: "legalNameSection_lastName", label: "Family Name", req: true},
+    {t: "text", id: "email", label: "Email Address", req: true},
+  ].concat(P.get("sneaky") === "1" ? [{t: "text", id: "preferredName", label: "Preferred Name", req: true, quiet: true}] : []).concat([
+    {t: "dd", id: "phone-device-type", label: "Phone Device Type", req: true, opts: ["Landline", "Mobile", "Fax"]},
+    {t: "text", id: "phone-number", label: "Phone Number", req: true},
+    {t: "dd", id: "countryDropdown", label: "Country", req: true, opts: ["Kenya", "Nigeria", "South Africa", "United Kingdom"]},
+    {t: "dd", id: "sourceDropdown", label: "How Did You Hear About Us?", req: true, opts: ["Referral", "Job Board", "Career Fair"]},
+  ])},
+  {title: "My Experience", fields: [
+    {t: "file", id: "file-upload-input-ref", label: "Resume/CV", req: true},
+    {t: "text", id: "linkedinQuestion", label: "LinkedIn", req: false},
+  ]},
+  {title: "Application Questions", fields: [
+    {t: "radio", id: "auth", label: "Are you legally authorised to work in South Africa?", req: true, opts: ["Yes", "No"]},
+    {t: "text", id: "notice", label: "What is your notice period?", req: true},
+    {t: "dd", id: "relocate", label: "Are you willing to relocate?", req: true, opts: ["Yes", "No"]},
+  ]},
+  {title: "Voluntary Disclosures", fields: [
+    {t: "dd", id: "gender", label: "Gender", req: false, opts: ["Female", "Male", "Prefer not to say"]},
+  ].concat(TERMS ? [{t: "check", id: "agreementCheckbox", label: "I agree to the terms and conditions", req: true}] : [])},
+  {title: "Review", fields: []},
+];
+const h = (tag, attrs, ...kids) => { const e = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v)); kids.forEach(k => e.append(k)); return e; };
+function render() {
+  const app = document.getElementById("app"); app.innerHTML = "";
+  if (S.submitted) { app.append(h("h2", {}, "Application submitted")); return; }
+  if (S.step < 0) {
+    app.append(h("h2", {}, "Senior Data Engineer"), h("p", {}, "Join our data team. Sign In for saved jobs."));
+    const a = h("a", {"data-automation-id": "adventureButton", href: "#"}, "Apply");
+    a.onclick = (e) => { e.preventDefault(); app.innerHTML = "";
+      const m = h("a", {"data-automation-id": "applyManually", href: "#"}, "Apply Manually");
+      m.onclick = (e2) => { e2.preventDefault(); S.step = 0; render(); };
+      app.append(h("h2", {}, "Start Your Application"), m); };
+    app.append(a); return;
+  }
+  const st = STEPS[S.step];
+  app.append(h("div", {"data-automation-id": "progressBarActiveStep"}, st.title), h("h2", {}, st.title));
+  st.fields.forEach(f => {
+    const box = h("div", {"data-automation-id": "formField-" + f.id, class: "fld"});
+    if (f.t === "text" || f.t === "file") {
+      const inp = h("input", {id: f.id, "data-automation-id": f.id, type: f.t === "file" ? "file" : "text"});
+      if (f.req && !f.quiet) inp.setAttribute("aria-required", "true");   // quiet: required, but not marked
+      if (S.data[f.id]) inp.value = S.data[f.id];
+      inp.onchange = () => { S.data[f.id] = f.t === "file" ? (inp.files[0] || {}).name : inp.value; };
+      box.append(h("label", {for: f.id}, f.label + (f.req ? " *" : "")), inp);
+    } else if (f.t === "dd") {
+      const lab = h("label", {id: f.id + "-label"}, f.label + (f.req ? " *" : ""));
+      const btn = h("button", {type: "button", "aria-haspopup": "listbox", "aria-labelledby": f.id + "-label",
+                               "data-automation-id": f.id}, S.data[f.id] || "Select One");
+      if (f.req) btn.setAttribute("aria-required", "true");
+      btn.onclick = () => {
+        document.querySelectorAll("[role=listbox]").forEach(x => x.remove());
+        const lb = h("div", {role: "listbox"});
+        f.opts.forEach(o => { const op = h("div", {role: "option"}, o);
+          op.onclick = () => { S.data[f.id] = o; btn.textContent = o; lb.remove(); }; lb.append(op); });
+        box.append(lb);
+      };
+      box.append(lab, btn);
+    } else if (f.t === "radio") {
+      const fs = h("fieldset", {id: f.id}); if (f.req) fs.setAttribute("aria-required", "true");
+      fs.append(h("legend", {}, f.label));
+      f.opts.forEach((o, i) => { const r = h("input", {type: "radio", name: f.id, id: f.id + i});
+        r.onchange = () => { S.data[f.id] = o; }; fs.append(r, h("label", {for: f.id + i}, o)); });
+      box.append(fs);
+    } else if (f.t === "check") {
+      const c = h("input", {type: "checkbox", id: f.id}); if (f.req) c.required = true;
+      c.onchange = () => { S.data[f.id] = c.checked ? "on" : ""; };
+      box.append(c, h("label", {for: f.id}, f.label));
+    }
+    app.append(box);
+  });
+  if (st.title === "Review") {
+    const pre = h("pre", {id: "review"}, JSON.stringify(S.data, null, 1));
+    const sub = h("button", {"data-automation-id": "pageFooterNextButton"}, "Submit");
+    sub.onclick = () => { window.__submitted = S.data; S.submitted = true; render(); };
+    app.append(pre, sub); return;
+  }
+  const next = h("button", {"data-automation-id": "pageFooterNextButton"}, "Save and Continue");
+  next.onclick = () => {
+    const miss = st.fields.filter(f => f.req && !S.data[f.id]);
+    document.querySelectorAll('[data-automation-id="errorMessage"]').forEach(x => x.remove());
+    if (miss.length) { miss.forEach(f => app.append(h("div", {"data-automation-id": "errorMessage"},
+                                                     `Error: ${f.label} is required`))); return; }
+    S.step++; render(); window.scrollTo(0, 0);
+  };
+  app.append(next);
+}
+render();
+</script>
+</body></html>

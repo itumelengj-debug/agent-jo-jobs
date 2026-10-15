@@ -224,7 +224,11 @@ def company_boards(p: dict = None) -> list:
     have = {str(s.get("url", "")).rstrip("/") for s in jobscout.job_sources()}
     out = {}
     for r in jobscout.roles():
-        hit = jobscout.ats_board_for(r.get("url", ""))
+        # the advert, or the form an application through it reached: a
+        # company's own careers page that hands you to Greenhouse names its
+        # board only once you've been through it
+        hit = jobscout.ats_board_for(r.get("url", "")) or \
+            jobscout.ats_board_for(((r.get("portal") or {}).get("form_url")) or "")
         if not hit:
             continue
         kind, slug, api = hit
@@ -249,8 +253,10 @@ def validate(url: str, kind: str) -> dict:
     something to read or it doesn't, and the only way to know is to try."""
     from . import jobscout
     try:
-        text = jobscout._fetch_source(url)
+        text = jobscout._fetch_workday(url) if kind == "workday" else jobscout._fetch_source(url)
     except Exception as exc:
+        if kind == "workday":
+            return {"ok": False, "why": jobscout._explain_fetch_error(f"{type(exc).__name__}: {exc}", url)}
         # a refusal is often just headers; the browser path is the fallback
         try:
             text = jobscout.fetch_with_browser(url)
@@ -290,6 +296,110 @@ def validate(url: str, kind: str) -> dict:
                         "built in the browser after loading")}
     return {"ok": True, "found": len(real),
             "sample": [j["title"] for j in real[:3]]}
+
+
+# --------------------------------------------------------------------------- #
+#  a company's own board, found from its careers page
+# --------------------------------------------------------------------------- #
+_URLISH = re.compile(r"(?:https?:)?//[A-Za-z0-9.-]+\.[A-Za-z]{2,}[^\s\"'<>)\\]*", re.I)
+_CAREERS_LINK = re.compile(r"\b(careers?|jobs?|vacanc\w*|open (positions|roles)|join (us|our team)|"
+                           r"work (with|for) us|opportunit\w*|we'?re hiring|current openings)\b", re.I)
+PAGES_LOOKED_AT = 4
+
+
+def _boards_in(text: str, base: str) -> list:
+    from . import jobscout
+    out, seen = [], set()
+    for m in _URLISH.finditer(text or ""):
+        u = m.group(0)
+        if u.startswith("//"):
+            u = "https:" + u
+        hit = jobscout.ats_board_for(u)
+        if hit and hit[2] not in seen:
+            seen.add(hit[2])
+            out.append({"kind": hit[0], "slug": hit[1], "url": hit[2], "seen_on": base})
+    return out
+
+
+def find_boards(url: str) -> dict:
+    """The job board behind a company's careers page.
+
+    Most companies don't list roles on their own site: the careers page links
+    to, or embeds, Greenhouse, Lever, Workday and the rest, and those publish
+    every role the company has in a form the app can read every day. This
+    reads the page you give it (and up to three careers or jobs pages it
+    links to) for those, then checks each board really returns roles before
+    offering it."""
+    from . import jobscout
+    start = jobscout.normalise_url(url)
+    if not start:
+        return {"ok": False, "error": "That doesn't look like a web address. Paste the company's "
+                                      "careers page, like acme.com/careers."}
+    found, looked, queue, seen = {}, [], [start], set()
+    for b in _boards_in(start, start):
+        found[b["url"]] = b
+    while queue and len(looked) < PAGES_LOOKED_AT and not found:
+        u = queue.pop(0)
+        if u in seen:
+            continue
+        seen.add(u)
+        text, how = "", "direct"
+        try:
+            text = jobscout._fetch_source(u)
+        except Exception as exc:
+            looked.append({"url": u, "error": jobscout._explain_fetch_error(f"{type(exc).__name__}: {exc}", u)})
+        if text:
+            looked.append({"url": u, "how": how})
+        for b in _boards_in(text, u):
+            found.setdefault(b["url"], b)
+        if found:
+            break
+        if text and len(looked) == 1 and len(re.sub(r"<[^>]+>", " ", text).split()) < 150:
+            # a page built by script shows its board only once rendered
+            try:
+                shown = jobscout.fetch_with_browser(u)
+                looked[-1]["how"] = "browser"
+                for b in _boards_in(shown, u):
+                    found.setdefault(b["url"], b)
+                text = shown or text
+            except Exception:
+                pass
+            if found:
+                break
+        for m in re.finditer(r"<a\b[^>]*href=[\"']([^\"'#]+)[\"'][^>]*>(.*?)</a>", text or "", re.I | re.S):
+            href, inner = m.group(1), re.sub(r"<[^>]+>", " ", m.group(2))
+            if not (_CAREERS_LINK.search(inner) or _CAREERS_LINK.search(href)):
+                continue
+            nu = jobscout._abs_url(href, u)
+            if not nu.startswith(("http://", "https://")):
+                continue
+            if jobscout._site_of(nu) != jobscout._site_of(start):
+                continue
+            if nu not in seen and nu not in queue and len(queue) < 6:
+                queue.append(nu)
+    have = {str(s.get("url", "")).rstrip("/") for s in jobscout.job_sources()}
+    boards, failed = [], []
+    for b in list(found.values())[:4]:
+        v = validate(b["url"], b["kind"])
+        name = " ".join(w.capitalize() for w in re.split(r"[-_.]+", b["slug"]) if w) or jobscout._site_of(start)
+        row = {"name": f"{name} — careers", "kind": v.get("kind") or b["kind"], "url": b["url"],
+               "system": "teamtailor" if b["kind"] == "rss" else b["kind"], "found": v.get("found", 0),
+               "sample": v.get("sample", []), "added": b["url"].rstrip("/") in have, "seen_on": b["seen_on"]}
+        (boards if v.get("ok") else failed).append({**row, "why": v.get("why", "")})
+    if boards:
+        msg = "Found " + "; ".join(f"{b['name']} on {b['system'].capitalize()} "
+                                   f"({b['found']} role{'' if b['found'] == 1 else 's'})"
+                                   for b in boards) + "."
+    elif failed:
+        msg = ("It found " + ", ".join(f"a {b['system'].capitalize()} board" for b in failed)
+               + " but it returned no roles just now — " + (failed[0].get("why") or "nothing listed") + ".")
+    else:
+        msg = ("No job board found on that page" + (f" or the {len(looked) - 1} careers page(s) it links to"
+                                                     if len(looked) > 1 else "")
+               + ". If the company lists roles on its own site, add the page itself as a source.")
+    _audit("boards", f"looked for a board behind {jobscout._site_of(start)}: {len(boards)} found")
+    return {"ok": True, "url": start, "boards": boards, "failed": failed,
+            "looked_at": looked, "message": msg}
 
 
 # A board that failed is left alone for this long before it is tried again;

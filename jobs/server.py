@@ -38,6 +38,11 @@ import agent.jobalerts as jobalerts                           # noqa: E402
 import agent.cv as cvmod                                      # noqa: E402
 import agent.portal as portal                                 # noqa: E402
 import agent.outcomes as outcomes                             # noqa: E402
+import agent.cvstore as cvstore                               # noqa: E402
+import agent.answerbank as answerbank                         # noqa: E402
+import agent.inbox as inbox                                   # noqa: E402
+import agent.digest as digest                                 # noqa: E402
+import agent.updater as updater                               # noqa: E402
 import agent.brain as brainmod                                # noqa: E402
 from agent.brain import make_brain, EngineNotConfigured       # noqa: E402
 import agent.engines as engines                               # noqa: E402
@@ -269,11 +274,17 @@ class JobsAutoBody(BaseModel):
     daily_cap: int | None = None
     require_clean_check: bool | None = None
     signature: str | None = None
+    # may the engine work out a company site it doesn't know, and in how
+    # many steps (agent/navigator.py)
+    explore: bool | None = None
+    explore_turns: int | None = None
 
 
 @app.post("/api/jobs/auto")
 def jobs_auto(body: JobsAutoBody):
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "explore_turns" in patch:
+        patch["explore_turns"] = max(0, min(40, int(patch["explore_turns"])))
     return {"auto": jobscout.save_auto_config(patch)}
 
 
@@ -292,6 +303,447 @@ def _finish_run(r: dict) -> dict:
     if r.get("ok", True) and not (r.get("sent") or []):
         r["why_nothing"] = jobscout.auto_readiness()
     return r
+
+
+class AutonomyBody(BaseModel):
+    level: str = ""
+
+
+@app.get("/api/jobs/autonomy")
+def jobs_autonomy():
+    return {"level": jobscout.auto_config()["level"],
+            "levels": [{"id": k, "says": jobscout.AUTONOMY_SAYS[k]}
+                       for k in jobscout.AUTONOMY]}
+
+
+@app.post("/api/jobs/autonomy")
+def jobs_autonomy_set(body: AutonomyBody):
+    res = jobscout.set_autonomy(body.level)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+class InboxBody(BaseModel):
+    enabled: bool | None = None
+    imap_host: str | None = None
+    folder: str | None = None
+    days: int | None = None
+
+
+@app.get("/api/jobs/inbox")
+def jobs_inbox():
+    from agent import outreach
+    mail = outreach.load_config()
+    s = inbox.settings()
+    recent = []
+    for r in jobscout.roles():
+        for rep in r.get("replies") or []:
+            recent.append({**rep, "role": r["title"], "company": r.get("company", ""),
+                           "stage": r.get("stage")})
+    recent.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return {"settings": s, "folder": str(inbox.replies_dir()),
+            "mail_ready": bool(mail.get("host") and mail.get("password")),
+            "imap_guess": inbox.imap_host_for(mail.get("host", "")),
+            "recent": recent[:30]}
+
+
+@app.post("/api/jobs/inbox")
+def jobs_inbox_settings(body: InboxBody):
+    return {"settings": inbox.save_settings(
+        {k: v for k, v in body.__dict__.items() if v is not None})}
+
+
+@app.post("/api/jobs/inbox/check")
+def jobs_inbox_check():
+    res = inbox.check()
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+class DigestBody(BaseModel):
+    enabled: bool | None = None
+    to: str | None = None
+    weekday: int | None = None
+
+
+@app.get("/api/jobs/digest")
+def jobs_digest():
+    return {"settings": digest.settings(), "days": digest.DAYS, "preview": digest.build()}
+
+
+@app.post("/api/jobs/digest")
+def jobs_digest_settings(body: DigestBody):
+    return {"settings": digest.save_settings(
+        {k: v for k, v in body.__dict__.items() if v is not None})}
+
+
+@app.post("/api/jobs/digest/send")
+def jobs_digest_send():
+    res = digest.send(force=True)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+# --- designed CVs, translations, the interview brief (agent/resume.py) ---- #
+from agent import resume as _resume                # noqa: E402
+
+
+class ResumeBody(BaseModel):
+    key: str = ""
+    template: str = "classic"
+    format: str = "pdf"
+    language: str = "English"
+    engine: str = ""
+
+
+class LetterTranslateBody(BaseModel):
+    key: str
+    language: str
+    engine: str = ""
+
+
+def _file_link(res: dict) -> dict:
+    return {**res, "url": "/api/jobs/resume/file?name=" + res["filename"]}
+
+
+@app.get("/api/jobs/resume/options")
+def resume_options():
+    return {"templates": _resume.TEMPLATES, "languages": _resume.LANGUAGES}
+
+
+@app.post("/api/jobs/resume")
+def resume_make(body: ResumeBody):
+    role = None
+    if body.key:
+        role = jobscout.get_role(body.key)
+        if role is None:
+            raise HTTPException(status_code=404, detail="no such role")
+    p = jobscout.profile()
+    m = _resume.model_for(role, p)
+    if body.language and body.language != "English":
+        model, why = _trend_model(body.engine or "")
+        if why:
+            raise HTTPException(status_code=409, detail=why)
+        tr = _resume.translate(m, body.language, get_brain(), model=model,
+                               keep=_resume.keep_terms(p))
+        if not tr.get("ok"):
+            raise HTTPException(status_code=422, detail=tr["error"][:400])
+        m = tr["model"]
+    res = _resume.make(role, p, template=body.template,
+                       fmt="docx" if body.format == "docx" else "pdf", model=m)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"][:400])
+    return _file_link(res)
+
+
+@app.get("/api/jobs/resume/file")
+def resume_file(name: str):
+    import os as _os
+    safe = _os.path.basename(name)
+    f = _resume._dir() / safe
+    if safe != name or not f.is_file() or f.suffix not in (".pdf", ".docx"):
+        raise HTTPException(status_code=404, detail="not found")
+    mt = ("application/pdf" if f.suffix == ".pdf" else
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return FileResponse(str(f), media_type=mt, filename=safe)
+
+
+# Defined BEFORE the endpoints that use it (the interview brief below was
+# declared above it, and every brief came back 422 until it moved here). FastAPI resolves the annotation
+# when the route is registered, and a model declared later isn't found — so
+# the parameter was treated as a QUERY field and every call came back 422
+# saying "body: Field required", which reads like the client's fault.
+class JobsKeyBody(BaseModel):
+    key: str
+    engine: str = ""
+
+
+@app.post("/api/jobs/brief")
+def interview_brief(body: JobsKeyBody):
+    r = jobscout.get_role(body.key)
+    if r is None:
+        raise HTTPException(status_code=404, detail="no such role")
+    res = _resume.brief_pdf(r)
+    if not res.get("ok"):
+        raise HTTPException(status_code=500, detail=res["error"][:300])
+    return _file_link(res)
+
+
+@app.post("/api/jobs/translate-letter")
+def translate_letter(body: LetterTranslateBody):
+    r = jobscout.get_role(body.key)
+    if r is None or not (r.get("draft") or {}).get("body"):
+        raise HTTPException(status_code=404, detail="That role has no draft to translate.")
+    model, why = _trend_model(body.engine or "")
+    if why:
+        raise HTTPException(status_code=409, detail=why)
+    d = r["draft"]
+    res = _resume.translate_letter(d.get("subject", ""), d["body"], body.language, get_brain(),
+                                   model=model, keep=_resume.keep_terms(jobscout.profile()))
+    if not res.get("ok"):
+        raise HTTPException(status_code=422, detail=res["error"][:400])
+    tr = dict(r.get("draft_translations") or {})
+    tr[body.language] = {"subject": res["subject"], "body": res["body"]}
+    jobscout.update_role(body.key, draft_translations=tr)
+    return res
+
+
+# --- people you've dealt with (agent/contacts.py) ------------------------- #
+from agent import contacts as _contacts            # noqa: E402
+
+
+class PersonBody(BaseModel):
+    email: str
+    name: str = ""
+    company: str = ""
+    notes: str = ""
+
+
+class PersonUpdateBody(BaseModel):
+    email: str
+    name: str | None = None
+    notes: str | None = None
+    done: bool | None = None
+    touched: bool = False
+
+
+class PersonNoteBody(BaseModel):
+    key: str
+    email: str
+    engine: str = ""
+
+
+@app.get("/api/jobs/people")
+def people_list():
+    return {"people": _contacts.people(), "get_back_to": _contacts.get_back_to()}
+
+
+@app.post("/api/jobs/people/sync")
+def people_sync():
+    r = _contacts.sync()
+    r["flagged"] = _contacts.flag_roles()
+    return r
+
+
+@app.post("/api/jobs/people")
+def people_add(body: PersonBody):
+    r = _contacts.add(body.name, body.email, body.company, body.notes)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"])
+    _contacts.flag_roles()
+    return r
+
+
+@app.post("/api/jobs/people/update")
+def people_update(body: PersonUpdateBody):
+    r = _contacts.update(body.email, name=body.name, notes=body.notes, done=body.done,
+                         touched=body.touched)
+    if not r.get("ok"):
+        raise HTTPException(status_code=404, detail=r["error"])
+    return r
+
+
+@app.post("/api/jobs/people/remove")
+def people_remove(body: PersonBody):
+    r = _contacts.remove(body.email)
+    _contacts.flag_roles()
+    return r
+
+
+@app.post("/api/jobs/people/note")
+def people_note(body: PersonNoteBody):
+    model, why = _trend_model(body.engine or "")
+    if why:
+        raise HTTPException(status_code=409, detail=why)
+    r = _contacts.draft_note(body.key, body.email, get_brain(), model=model)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"][:300])
+    return r
+
+
+# --- backup and restore (agent/backup.py) -------------------------------- #
+from agent import backup as _backup                # noqa: E402
+
+
+class RestoreBody(BaseModel):
+    data: str = ""            # base64 of the zip
+
+
+@app.get("/api/jobs/backups")
+def backups_list():
+    return {"backups": _backup.backups(), "folder": str(_backup._dir())}
+
+
+@app.post("/api/jobs/backups")
+def backups_make():
+    r = _backup.make()
+    return {**r, "url": "/api/jobs/backups/file?name=" + r["filename"]}
+
+
+@app.get("/api/jobs/backups/file")
+def backups_file(name: str):
+    import os as _os
+    safe = _os.path.basename(name)
+    f = _backup._dir() / safe
+    if safe != name or not f.is_file() or not safe.startswith("agent-jo-jobs-backup-"):
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(f), media_type="application/zip", filename=safe)
+
+
+@app.post("/api/jobs/backups/restore")
+def backups_restore(body: RestoreBody):
+    import base64
+    try:
+        raw = base64.b64decode(body.data.split(",", 1)[-1], validate=False)
+    except Exception:
+        raise HTTPException(status_code=400, detail="That file didn't arrive whole.")
+    r = _backup.restore(raw)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+# --- the email account applications are sent from (agent/outreach.py) ---- #
+# Since the apps split, Agent Jo Jobs had no way to set this up: the readiness
+# check sent you to "Agent Jo's Outreach panel", which isn't in this app, and
+# an email application could never be sent from a fresh install.
+class EmailBody(BaseModel):
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    password: str = ""
+    from_addr: str = ""
+    from_name: str = ""
+    use_tls: bool = True
+    enabled: bool = True
+
+
+EMAIL_PRESETS = {
+    "gmail.com": {"host": "smtp.gmail.com", "port": 587,
+                  "note": "Gmail needs an app password (Google Account → Security → App passwords), not your normal one."},
+    "googlemail.com": {"host": "smtp.gmail.com", "port": 587, "note": "Use an app password."},
+    "outlook.com": {"host": "smtp-mail.outlook.com", "port": 587, "note": ""},
+    "hotmail.com": {"host": "smtp-mail.outlook.com", "port": 587, "note": ""},
+    "live.com": {"host": "smtp-mail.outlook.com", "port": 587, "note": ""},
+    "yahoo.com": {"host": "smtp.mail.yahoo.com", "port": 587, "note": "Yahoo needs an app password."},
+    "icloud.com": {"host": "smtp.mail.me.com", "port": 587, "note": "iCloud needs an app-specific password."},
+}
+
+
+@app.post("/api/jobs/auto/settled")
+def jobs_auto_settled():
+    return jobscout.end_settling_in()
+
+
+@app.get("/api/jobs/email")
+def jobs_email_status():
+    from agent import outreach
+    st = outreach.status()
+    return {k: st[k] for k in ("configured", "enabled", "host", "port", "username", "from_addr",
+                               "from_name", "use_tls", "has_password")}
+
+
+@app.get("/api/jobs/email/preset")
+def jobs_email_preset(address: str):
+    dom = address.rsplit("@", 1)[-1].lower().strip() if "@" in address else ""
+    return EMAIL_PRESETS.get(dom, {})
+
+
+@app.post("/api/jobs/email")
+def jobs_email_save(body: EmailBody):
+    from agent import outreach
+    if body.from_addr and "@" not in body.from_addr:
+        raise HTTPException(status_code=400, detail="That isn't an email address.")
+    data = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    if not data["username"]:
+        data["username"] = data["from_addr"]
+    outreach.save_config(data)
+    return jobs_email_status()
+
+
+@app.post("/api/jobs/email/test")
+def jobs_email_test():
+    """A real message to your own address: the only proof the account works."""
+    from agent import outreach
+    cfg = outreach.load_config()
+    me = cfg.get("from_addr", "")
+    if not me:
+        raise HTTPException(status_code=400, detail="Set your email address first.")
+    r = outreach.send(me, "Agent Jo Jobs — test message",
+                      "This is the test you asked for. If it arrived, applications can be sent "
+                      "from this account.\n\n— Agent Jo Jobs")
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=str(r.get("error"))[:300])
+    return {"ok": True, "to": me}
+
+
+# --- the phone companion (agent/phone.py) -------------------------------- #
+from agent import phone as _phone                  # noqa: E402
+
+
+class PhoneBody(BaseModel):
+    enabled: bool = False
+
+
+@app.get("/api/phone")
+def phone_status():
+    return _phone.status()
+
+
+@app.post("/api/phone")
+def phone_set(body: PhoneBody):
+    return _phone.set_enabled(body.enabled)
+
+
+@app.post("/api/phone/rotate")
+def phone_rotate():
+    return _phone.rotate_key()
+
+
+class UpdateBody(BaseModel):
+    source: str = ""
+
+
+@app.get("/api/updates")
+def updates_status():
+    return updater.status()
+
+
+@app.post("/api/updates/source")
+def updates_source(body: UpdateBody):
+    return updater.save_settings({"source": body.source.strip()})
+
+
+@app.post("/api/updates/check")
+def updates_check():
+    res = updater.check()
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/updates/install")
+def updates_install():
+    res = updater.install()
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/updates/rollback")
+def updates_rollback():
+    res = updater.roll_back()
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.get("/api/jobs/runs")
+def jobs_runs():
+    return {"runs": jobscout.run_reports(30)}
 
 
 @app.get("/api/jobs/auto/status")
@@ -378,10 +830,19 @@ def jobs_portal_session(key: str):
     """
     ses = portal.session(key) or {"state": ""}
     if ses.get("done") and not ses.get("recorded"):
-        if ses.get("state") == portal.SUBMITTED:
+        state = ses.get("state")
+        if jobscout.get_role(key) is not None and state not in (portal.RUNNING, portal.WAITING):
+            # what it did and learned stays with the role, to read later
+            jobscout.update_role(key, portal=jobscout._portal_brief(ses), portal_at=ses.get("at", ""))
+        if state == portal.SUBMITTED:
             jobscout.set_stage(key, "applied", "submitted via portal")
-        elif ses.get("state") == portal.FILLED:
+        elif state == portal.FILLED:
             jobscout.update_role(key, portal_filled_at=ses.get("at", ""))
+        elif state == portal.CLOSED and jobscout.get_role(key) is not None:
+            jobscout.mark_closed(key, str(ses.get("message") or "the advert says it's closed")[:200])
+        elif state == portal.APPLY_BY_EMAIL and ses.get("apply_email") \
+                and jobscout.get_role(key) is not None:
+            jobscout.update_role(key, apply_email=ses["apply_email"])
         portal._set_session(key, recorded=True)
     return ses
 
@@ -413,10 +874,36 @@ def jobs_portal_sites():
     return {"sites": out}
 
 
+class ForgetSiteBody(BaseModel):
+    site: str
+
+
+@app.get("/api/jobs/portal/learning")
+def jobs_portal_learning():
+    """What applying has taught it, site by site, and whether applications
+    are getting easier: forms finished without you, engine steps per form."""
+    from agent import playbooks
+    rep = playbooks.report()
+    a = jobscout.auto_config()
+    rep["explore"] = {"on": bool(a.get("explore", True)),
+                      "turns": int(a.get("explore_turns", 12) or 0)}
+    return rep
+
+
+@app.post("/api/jobs/portal/learning/forget")
+def jobs_portal_learning_forget(body: ForgetSiteBody):
+    """Forget what one site taught it; the next application starts fresh."""
+    from agent import playbooks
+    r = playbooks.forget(body.site)
+    if not r.get("ok"):
+        raise HTTPException(status_code=404, detail="nothing is known about that site")
+    return {"ok": True, "learning": jobs_portal_learning()}
+
+
 @app.get("/api/jobs/portal/history")
 def jobs_portal_history():
     return {"runs": portal.history(20),
-            "ready": portal.readiness(jobscout.profile()),
+            "ready": portal.readiness(portal.with_contact(jobscout.profile())),
             "browser_profile": str(portal.profile_dir())}
 
 
@@ -478,6 +965,21 @@ def jobs_boards_match():
 def jobs_boards_auto():
     """Find, verify and add — only boards that actually return roles."""
     r = boards.auto_add(jobscout.profile())
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+class FindBoardBody(BaseModel):
+    url: str
+
+
+@app.post("/api/jobs/sources/explore")
+def jobs_sources_explore(body: FindBoardBody):
+    """The job board behind a company's careers page: Greenhouse, Lever,
+    Workday and the rest publish every role a company has. Checked before
+    it's offered; adding it is your call."""
+    r = boards.find_boards(body.url)
     if not r.get("ok"):
         raise HTTPException(status_code=400, detail=r["error"])
     return r
@@ -783,15 +1285,6 @@ def jobs_unignore(body: JobsRemoveBody):
     return jobscout.unignore(body.key)
 
 
-# Defined BEFORE the endpoints that use it. FastAPI resolves the annotation
-# when the route is registered, and a model declared later isn't found — so
-# the parameter was treated as a QUERY field and every call came back 422
-# saying "body: Field required", which reads like the client's fault.
-class JobsKeyBody(BaseModel):
-    key: str
-    engine: str = ""
-
-
 @app.post("/api/jobs/ats")
 def jobs_ats(body: JobsKeyBody):
     """Keyword coverage against the advert. Local, instant, no engine call."""
@@ -906,13 +1399,267 @@ def jobs_list():
     return {"roles": [dict(r, stale=jobscout.looks_stale(r),
                            days_listed=round(jobscout.days_listed(r)),
                            bucket=jobscout.role_state(r, _cfg)["bucket"],
-                           state_why=jobscout.role_state(r, _cfg)["why"])
+                           state_why=jobscout.role_state(r, _cfg)["why"],
+                           must_missing=jobscout.must_haves_missing(r))
                       for r in jobscout.roles()],
             "profile": jobscout.profile(),
             "auto": jobscout.auto_config(),
             "summary": jobscout.summary(),
             "follow_ups": jobscout.follow_ups(),
+            "interviews": _interviews.upcoming(jobscout.roles()),
             "daily": jobscout.schedule_enabled(memory)}
+
+
+# --- when the interview is, and a calendar file for it (agent/interviews.py) #
+from agent import interviews as _interviews        # noqa: E402
+
+
+class InterviewTimeBody(BaseModel):
+    key: str
+    at: str = ""          # "YYYY-MM-DD HH:MM", or "" to clear
+    link: str = ""
+
+
+@app.post("/api/jobs/interview-time")
+def jobs_interview_time(body: InterviewTimeBody):
+    from datetime import datetime as _dt
+    if jobscout.get_role(body.key) is None:
+        raise HTTPException(status_code=404, detail="no such role")
+    at = body.at.strip().replace("T", " ")[:16]
+    if at:
+        try:
+            _dt.strptime(at, "%Y-%m-%d %H:%M")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Give the time as YYYY-MM-DD HH:MM.")
+    link = body.link.strip()
+    if link and not link.startswith("https://"):
+        raise HTTPException(status_code=400, detail="A meeting link starts with https://")
+    fields = {"interview_at": at, "interview_at_by_hand": bool(at),
+              "interview_tz_note": "", "interview_said": ""}
+    if link or not at:
+        fields["interview_link"] = link
+    return {"ok": True, "role": jobscout.update_role(body.key, **fields)}
+
+
+@app.get("/api/jobs/interview.ics")
+def jobs_interview_ics(key: str):
+    from fastapi.responses import Response
+    r = jobscout.get_role(key)
+    if r is None or not r.get("interview_at"):
+        raise HTTPException(status_code=404, detail="No interview time set for that role.")
+    import re as _re
+    name = _re.sub(r"[^A-Za-z0-9]+", "-", f"interview-{r.get('company', '')}").strip("-")[:50]
+    return Response(_interviews.ics(r), media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.ics"'})
+
+
+# --- your edits to drafts, and the style learned from them (agent/style.py)  #
+from agent import style as _style                 # noqa: E402
+
+
+class DraftSaveBody(BaseModel):
+    key: str
+    body: str = ""
+    subject: str = ""
+
+
+class StyleForgetBody(BaseModel):
+    id: str
+
+
+@app.post("/api/jobs/draft/save")
+def jobs_draft_save(body: DraftSaveBody):
+    r = jobscout.save_draft(body.key, body.body, body.subject)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"][:300])
+    return r
+
+
+@app.get("/api/jobs/style")
+def jobs_style():
+    return _style.summary()
+
+
+@app.post("/api/jobs/style/forget")
+def jobs_style_forget(body: StyleForgetBody):
+    return _style.forget(body.id)
+
+
+@app.post("/api/jobs/style/reset")
+def jobs_style_reset():
+    return _style.reset()
+
+
+# --- practice interviews (agent/mockinterview.py) ------------------------- #
+from agent import mockinterview as _mock           # noqa: E402
+
+
+class MockAnswerBody(BaseModel):
+    key: str
+    text: str = ""
+    engine: str = ""
+
+
+def _mock_role(key: str) -> dict:
+    r = jobscout.get_role(key)
+    if r is None:
+        raise HTTPException(status_code=404, detail="no such role")
+    return r
+
+
+def _mock_brain(choice: str):
+    """The engine for feedback, or None — the local checks work without one."""
+    model, why = _trend_model(choice or "")
+    if why:
+        return None, None
+    try:
+        return get_brain(), model
+    except Exception:
+        return None, None
+
+
+@app.get("/api/jobs/mock")
+def jobs_mock_status(key: str):
+    _mock_role(key)
+    return _mock.status(key)
+
+
+@app.post("/api/jobs/mock/start")
+def jobs_mock_start(body: JobsKeyBody):
+    brain, model = _mock_brain(body.engine)
+    r = _mock.start(_mock_role(body.key), brain, model)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"][:300])
+    return r
+
+
+@app.post("/api/jobs/mock/answer")
+def jobs_mock_answer(body: MockAnswerBody):
+    brain, model = _mock_brain(body.engine)
+    r = _mock.answer(_mock_role(body.key), body.text, brain, model)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"][:300])
+    return r
+
+
+@app.post("/api/jobs/mock/finish")
+def jobs_mock_finish(body: JobsKeyBody):
+    r = _mock.finish(_mock_role(body.key))
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"][:300])
+    return r
+
+
+# --- your full CV, pasted once (agent/cvstore.py) ------------------------- #
+class CvPasteBody(BaseModel):
+    text: str = ""
+    name: str = ""
+    engine: str = ""
+
+
+@app.get("/api/jobs/cvtext")
+def jobs_cv_status():
+    return cvstore.status()
+
+
+@app.post("/api/jobs/cvtext")
+def jobs_cv_paste(body: CvPasteBody):
+    """Store and index the CV, then fill the profile's empty fields from it."""
+    res = cvstore.save(body.text, body.name)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    if res.get("linkedin"):
+        # a LinkedIn profile PDF states these plainly; only empty fields are filled
+        p = jobscout.profile()
+        filled = {k: v for k, v in res["linkedin"].items() if v and not p.get(k)}
+        if filled:
+            jobscout.save_profile({**p, **filled})
+        res["linkedin"]["filled"] = sorted(filled)
+    model, why = _trend_model(body.engine or "")
+    if why:
+        res["profile"] = {"ok": False, "error": why}
+    else:
+        try:
+            res["profile"] = cvstore.to_profile(get_brain(), model=model)
+        except Exception as exc:
+            res["profile"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    res["ready"] = jobscout.profile_ready()[0]
+    return res
+
+
+class CvFileBody(BaseModel):
+    name: str = ""
+    data: str = ""            # base64 of the file's bytes
+    engine: str = ""
+
+
+@app.post("/api/jobs/cvfile")
+def jobs_cv_file(body: CvFileBody):
+    """A CV uploaded as PDF, Word or text: read, then stored like a paste."""
+    import base64
+    try:
+        raw = base64.b64decode(body.data.split(",", 1)[-1], validate=False)
+    except Exception:
+        raise HTTPException(status_code=400, detail="That file didn't arrive whole.")
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="That file is over 15 MB.")
+    got = cvstore.extract_text(body.name, raw)
+    if not got.get("ok"):
+        raise HTTPException(status_code=400, detail=got["error"])
+    return jobs_cv_paste(CvPasteBody(text=got["text"], name=body.name,
+                                     engine=body.engine))
+
+
+@app.delete("/api/jobs/cvtext")
+def jobs_cv_clear():
+    return cvstore.clear()
+
+
+# --- answers you've given forms (agent/answerbank.py) ---------------------- #
+class AnswerBody(BaseModel):
+    question: str = ""
+    answer: str = ""
+    reuse: bool | None = None
+
+
+@app.get("/api/jobs/answers")
+def jobs_answers():
+    return {"answers": answerbank.all_answers()}
+
+
+@app.post("/api/jobs/answers")
+def jobs_answer_add(body: AnswerBody):
+    res = answerbank.remember(body.question, body.answer, source="you")
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Not saved: {res.get('why')}")
+    return res
+
+
+@app.get("/api/jobs/answers/open")
+def jobs_answers_open():
+    return {"open": answerbank.open_questions()}
+
+
+@app.post("/api/jobs/answers/open")
+def jobs_answers_open_answer(body: AnswerBody):
+    res = answerbank.answer_open(body.question, body.answer)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Not saved: {res.get('why')}")
+    return {**res, "open": answerbank.open_questions()}
+
+
+@app.post("/api/jobs/answers/{aid}")
+def jobs_answer_edit(aid: int, body: AnswerBody):
+    res = answerbank.update(aid, question=body.question or None,
+                            answer=body.answer or None, reuse=body.reuse)
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=res["error"])
+    return res
+
+
+@app.delete("/api/jobs/answers/{aid}")
+def jobs_answer_delete(aid: int):
+    return answerbank.delete(aid)
 
 
 @app.post("/api/jobs/profile")
@@ -1169,18 +1916,6 @@ def engine_get(name: str):
     if e is None:
         raise HTTPException(status_code=404, detail="no such engine")
     return e
-
-
-class EngineEditBody(BaseModel):
-    name: str
-    new_name: str | None = None
-    base_url: str | None = None
-    api_key: str | None = None
-    model: str | None = None
-    tools: bool | None = None
-    stream: bool | None = None
-    price_in: float | None = None
-    price_out: float | None = None
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")

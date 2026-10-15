@@ -64,6 +64,7 @@ DEFAULT_PROFILE = {
     # Portal forms ask for these every time; an email application never did,
     # which is why they weren't here before.
     "full_name": "",
+    "email": "",
     "phone": "",
     "location": "",
     "linkedin": "",
@@ -330,17 +331,31 @@ _STOP = {
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "January",
     "February", "March", "April", "May", "June", "July", "August",
     "September", "October", "November", "December",
+    # the words every letter uses around the claims, not claims themselves
+    "Hiring", "Manager", "Recruiter", "Recruitment", "Sir", "Madam", "Mr", "Mrs", "Ms",
+    "Yours", "Warm", "Cheers", "Please", "Attached", "Looking", "Happy", "Glad",
+    "Also", "Since", "After", "Before", "Over", "Today", "Currently", "Recently",
 }
 
 
 def _profile_corpus(p: dict, role: dict | None = None) -> str:
-    bits = [_as_text(p.get("summary")), _as_text(p.get("headline")),
+    # your own name and town: a letter signed "Thandi" was held for
+    # mentioning someone the profile didn't know
+    bits = [_as_text(p.get("full_name")), _as_text(p.get("location")),
+            _as_text(p.get("summary")), _as_text(p.get("headline")),
             " ".join(_as_list(p.get("skills"))),
             " ".join(_as_list(p.get("technologies"))),
             " ".join(_as_list(p.get("employers"))),
             " ".join(_as_list(p.get("achievements"))),
             " ".join(_as_list(p.get("certifications"))),
             json.dumps(p.get("years_experience") or {})]
+    # the pasted CV is yours too: a tool or employer named there may be
+    # claimed (agent/cvstore.py)
+    try:
+        from . import cvstore
+        bits.append(cvstore.text())
+    except Exception:
+        pass
     if role:
         # terms lifted from the advert itself are fair to echo back
         bits += [_as_text(role.get("title")), _as_text(role.get("company")),
@@ -416,7 +431,7 @@ _SCORE_SYSTEM = (
 
 _DRAFT_SYSTEM = (
     "You draft a short application message for a candidate, in THEIR voice.\n"
-    "ABSOLUTE RULE: use only facts present in the PROFILE. Never invent an "
+    "ABSOLUTE RULE: use only facts present in the PROFILE or CV_EXCERPTS. Never invent an "
     "employer, technology, certification, metric or number of years. If the "
     "role wants something the profile doesn't show, either omit it or state "
     "plainly what the candidate has done that is adjacent — never imply "
@@ -534,7 +549,96 @@ def _banned_clause() -> str:
             "explicitly said they do not claim them: " + ", ".join(b) + ".")
 
 
-def draft_application(key: str, brain, model=None) -> dict:
+def _style_clause(skip: tuple = ()) -> str:
+    try:
+        from . import style
+        return style.prompt_clause(skip)
+    except Exception:
+        return ""
+
+
+def save_draft(key: str, body: str, subject: str = "") -> dict:
+    """Your edit of a draft: kept as the draft, re-checked, and learned from."""
+    r = get_role(key)
+    if r is None:
+        return {"ok": False, "error": "no such role"}
+    body = (body or "").strip()
+    if len(body) < 20:
+        return {"ok": False, "error": "That's too short to send — write the letter, or redraft it."}
+    old = r.get("draft") or {}
+    subject = (subject or old.get("subject") or f"Application: {r.get('title', '')}").strip()[:200]
+    learned = {}
+    if " ".join((old.get("body") or "").split()) == " ".join(body.split()) \
+            and subject == (old.get("subject") or subject):
+        return {"ok": True, "draft": old, "learned": False, "unchanged": True}
+    if old.get("body"):
+        from . import style
+        learned = style.record(old.get("engine_body") or old["body"], body, key=key,
+                               subject_before=old.get("subject", ""), subject_after=subject)
+    draft = {**old, "subject": subject, "body": body, "check": check_draft(body, r),
+             "quality": _quality(body, r),
+             "edited": True, "edited_at": _iso(),
+             # what the engine first wrote, so a second edit is compared with it
+             "engine_body": old.get("engine_body") or old.get("body", "")}
+    # an approval was of the old words; this text hasn't been approved
+    fields = {"draft": draft, "approved": False}
+    if r.get("stage") in ("found", "scored", "screened", None):
+        fields["stage"] = "drafted"
+    update_role(key, **fields)
+    _audit("draft", f"you edited {r.get('title', '')} @ {r.get('company', '')}"
+                    + ("" if draft["check"]["ok"] else " — still claims something to verify"))
+    return {"ok": True, "draft": draft, "learned": bool(learned.get("recorded"))}
+
+
+def _quality(body: str, r: dict) -> dict:
+    try:
+        from . import quality
+        return quality.score(body, r, profile())
+    except Exception:
+        return {}
+
+
+_REPLIED = {"offer": 3, "interview": 2, "responded": 1}
+_EXAMPLES_CLAUSE = (
+    "\nLETTERS_THAT_GOT_REPLIES, when given, are the candidate's own earlier "
+    "letters that led to a reply, an interview or an offer. Learn from their "
+    "tone, length and structure. Never copy their facts, employers, numbers or "
+    "claims: every claim must still come from PROFILE and CV_EXCERPTS.")
+
+
+def _title_words(r: dict) -> set:
+    return {w for w in re.findall(r"[a-z0-9+#]+", str((r or {}).get("title") or "").lower())
+            if len(w) > 2 and w not in ("senior", "junior", "lead", "the", "and", "for", "remote")}
+
+
+def letters_that_worked(role: dict, limit: int = 2) -> list:
+    """Your own sent letters that got a reply worth having — a reply, an
+    interview, an offer — most like this role first.
+
+    Every application's outcome is evidence about what works, and until now
+    the next draft never saw it. These go to the engine as examples of tone
+    and structure, never as a source of facts; the claims check still reads
+    every word of the new letter."""
+    want = _title_words(role)
+    found = []
+    for r in roles():
+        if r.get("key") == (role or {}).get("key") or r.get("stage") not in _REPLIED:
+            continue
+        d = r.get("draft") or {}
+        if not d.get("body") or (d.get("check") or {}).get("ok") is False:
+            continue
+        words = _title_words(r)
+        alike = len(want & words) / max(1, len(want | words))
+        found.append((alike, _REPLIED[r["stage"]], r))
+    found.sort(key=lambda x: (-x[0], -x[1]))
+    if any(alike > 0 for alike, _, _ in found):
+        found = [f for f in found if f[0] > 0]   # similar roles, when there are any
+    return [{"for": " @ ".join(x for x in (r.get("title"), r.get("company")) if x),
+             "outcome": r["stage"], "letter": str((r.get("draft") or {}).get("body"))[:1800]}
+            for _, _, r in found[:limit]]
+
+
+def draft_application(key: str, brain, model=None, fix: str = "") -> dict:
     r = get_role(key)
     if r is None:
         return {"ok": False, "error": "no such role"}
@@ -542,12 +646,27 @@ def draft_application(key: str, brain, model=None) -> dict:
     if not ok:
         return {"ok": False, "error": why}
     p = profile()
-    payload = json.dumps({"PROFILE": p, "ROLE": r,
-                          "VOICE": p.get("voice_notes", "")},
-                         default=str)[:12000]
+    # the parts of the full CV that bear on this advert, so the letter can
+    # cite real work, not only the profile's summary
     try:
-        data = _engine_json(brain, payload, _DRAFT_SYSTEM + _banned_clause(),
-                            model)
+        from . import cvstore
+        cv = cvstore.excerpts(f"{r.get('title', '')} {r.get('summary', '')}", k=4)
+    except Exception:
+        cv = ""
+    # what got replies before, for tone and shape only (last, so a long
+    # profile never loses its own words to them)
+    try:
+        worked = letters_that_worked(r)
+    except Exception:
+        worked = []
+    payload = json.dumps({"PROFILE": p, "CV_EXCERPTS": cv, "ROLE": r,
+                          "VOICE": p.get("voice_notes", ""),
+                          **({"LETTERS_THAT_GOT_REPLIES": worked} if worked else {})},
+                         default=str)[:14000]
+    try:
+        data = _engine_json(brain, payload, _DRAFT_SYSTEM + _banned_clause()
+                            + _style_clause() + (_EXAMPLES_CLAUSE if worked else "")
+                            + (fix or ""), model)
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     body = _as_text(data.get("body") or data.get("message")).strip()
@@ -560,8 +679,10 @@ def draft_application(key: str, brain, model=None) -> dict:
     draft = {"subject": (subject or f"Application: {r.get('title', '')}")[:200],
              "body": body,
              "gaps": _as_list(data.get("gaps"))[:8],
-             "check": check, "at": _iso()}
-    update_role(key, draft=draft, stage="drafted")
+             "check": check, "quality": _quality(body, r), "at": _iso(),
+             # which of your letters that got replies it learned from
+             "learned_from": [f"{w['for']} ({w['outcome']})" for w in worked]}
+    update_role(key, draft=draft, stage="drafted", approved=False)
     _audit("draft", f"{r['title']} @ {r.get('company', '')}"
                     + ("" if check["ok"]
                        else f" — {len(check['problems'])} claim(s) to verify"))
@@ -620,18 +741,141 @@ AUTO_DEFAULTS = {
     # opened forty of them would bury the ones that matter
     "portal_per_run": 5,
     "signature": "",
+    # a draft below this quality score (agent/quality.py) is redrafted once,
+    # then held for you — honest isn't the same as good enough to send
+    "min_quality": 60,
+    # a company site it doesn't know: may the engine work out the way to the
+    # form, and how many steps may it take (agent/navigator.py)? What it
+    # works out is kept, so the same site needs fewer next time.
+    "explore": True,
+    "explore_turns": 12,
 }
 
 
 def auto_config() -> dict:
-    return {**AUTO_DEFAULTS, **(load_config().get("auto") or {})}
+    cfg = {**AUTO_DEFAULTS, **(load_config().get("auto") or {})}
+    cfg["level"] = autonomy_of(cfg)
+    return cfg
+
+
+# --- how much it does without you --------------------------------------------- #
+# One setting instead of three switches whose combinations were hard to read.
+# Each level is the switches it stands for; set the switches by hand and the
+# level reads "custom".
+AUTONOMY = {
+    "draft":   {"deliver": False, "dry_run": True,  "portal_mode": "off"},
+    "prepare": {"deliver": True,  "dry_run": True,  "portal_mode": "prepare"},
+    "email":   {"deliver": True,  "dry_run": False, "portal_mode": "prepare"},
+    "full":    {"deliver": True,  "dry_run": False, "portal_mode": "submit"},
+}
+AUTONOMY_SAYS = {
+    "draft": "Finds, scores and drafts. Sends nothing and opens nothing — you review.",
+    "prepare": "Also fills in company forms for you to finish. Still sends nothing.",
+    "email": "Sends emailed applications that clear every check; fills forms for you to finish.",
+    "full": "Sends emailed applications and submits company forms that clear every check.",
+}
+
+
+def autonomy_of(cfg: dict) -> str:
+    for name, sw in AUTONOMY.items():
+        if all((cfg.get(k, True) if k == "deliver" else cfg.get(k)) == v
+               for k, v in sw.items()):
+            return name
+    return "custom"
+
+
+def set_autonomy(level: str) -> dict:
+    if level not in AUTONOMY:
+        return {"ok": False, "error": f"unknown level {level!r}"}
+    cfg = save_auto_config(dict(AUTONOMY[level]))
+    _audit("autonomy", f"set to {level}")
+    return {"ok": True, "level": level, "auto": auto_config()}
+
+
+# --- a report of every run ---------------------------------------------------- #
+RUNS_KEPT = 90
+
+
+def _runs_path() -> Path:
+    return _dir() / "runs.json"
+
+
+def run_reports(limit: int = 30) -> list:
+    try:
+        return json.loads(_runs_path().read_text("utf-8"))[:limit]
+    except Exception:
+        return []
+
+
+def _record_run(res: dict, kind: str) -> dict:
+    """Keep what a run did, so a scheduled run you weren't there for can be
+    read afterwards: sent, prepared, held and why, errors, questions waiting."""
+    try:
+        from . import answerbank
+        waiting = len(answerbank.open_questions())
+    except Exception:
+        waiting = 0
+    pick = lambda xs, *ks: [{k: x.get(k) for k in ks if x.get(k) not in (None, "", [])}
+                            for x in (xs or [])][:40]
+    rep = {"at": _iso(), "kind": kind, "level": auto_config().get("level"),
+           "summary": describe_run(res),
+           "dry_run": bool(res.get("dry_run")),
+           "discovered": res.get("discovered"),
+           "replies": res.get("replies"),
+           "sent": pick(res.get("sent"), "title", "company", "to", "dry_run"),
+           "prepared": pick(res.get("prepared"), "title", "company", "url", "needs_you",
+                            "learned", "engine_turns"),
+           # what this run's forms taught it, in one place for the report
+           "learned": [x for p in (res.get("prepared") or []) + (res.get("sent") or [])
+                       for x in (p.get("learned") or [])][:20],
+           "held": pick(res.get("held"), "title", "company", "reason"),
+           "errors": (res.get("error_groups") or {}) if res.get("error_groups")
+                     else {e: 1 for e in (res.get("errors") or [])[:10]},
+           "waiting_questions": waiting,
+           "error": res.get("error", "")}
+    with _ROLES_LOCK:
+        runs = [rep] + run_reports(RUNS_KEPT)
+        p = _runs_path()
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(runs[:RUNS_KEPT], indent=1), "utf-8")
+        tmp.replace(p)
+    return rep
 
 
 def save_auto_config(cfg: dict) -> dict:
     base = load_config()
-    base["auto"] = {**auto_config(), **(cfg or {})}
+    before = auto_config()
+    new = {**before, **(cfg or {})}
+    # the first time it goes live (really sending, or submitting forms), the
+    # settling-in days start: a reduced pace while you watch the first ones
+    live = not new.get("dry_run", True) and new.get("deliver", True)
+    if live and not new.get("live_since"):
+        new["live_since"] = _iso()
+    new.pop("level", None)
+    base["auto"] = new
     save_config(base)
     return base["auto"]
+
+
+SETTLE_DAYS, SETTLE_CAP = 3, 2
+
+
+def settling_in(cfg: dict | None = None) -> dict:
+    """The first days live run at a reduced pace: at most SETTLE_CAP a day and
+    SETTLE_CAP forms a run, so the first real applications are few enough to
+    read. {'on', 'days_left'}"""
+    cfg = cfg or auto_config()
+    since = cfg.get("live_since") or ""
+    if not since or cfg.get("dry_run", True) or cfg.get("settled"):
+        return {"on": False, "days_left": 0}
+    left = SETTLE_DAYS - _hours_since(since) / 24
+    return {"on": left > 0, "days_left": max(0, round(left, 1))}
+
+
+def end_settling_in() -> dict:
+    save_auto_config({"settled": True})
+    _audit("autonomy", "settling-in pace ended early")
+    return {"ok": True}
 
 
 def _explain_engine_error(err: str) -> str:
@@ -701,10 +945,15 @@ def _gate(r: dict, cfg: dict) -> str:
     certification, had its form filled in, and submitted in submit mode.
     Every role now clears the same gates; only how it is delivered differs.
     """
+    hit = deal_breaker(r)
+    if hit and not r.get("approved"):
+        return f"deal-breaker: “{hit}” is in the advert"
     fit = r.get("fit") or {}
     if fit.get("score") is None:
         return "not scored yet"
-    if int(fit["score"]) < int(cfg["min_score"]):
+    # a draft you approved (from your phone, say) is your call on the fit;
+    # every other gate below still applies
+    if int(fit["score"]) < int(cfg["min_score"]) and not r.get("approved"):
         return f"fit {fit['score']} is below your threshold {cfg['min_score']}"
     d = r.get("draft") or {}
     if not d.get("body"):
@@ -720,12 +969,27 @@ def _gate(r: dict, cfg: dict) -> str:
         n = len(chk.get("problems") or [])
         return (f"draft makes {n} claim(s) I can't source from your profile "
                 f"— needs your eyes")
+    # after the claim check: a fabrication is the reason that matters most
+    q = d.get("quality") or {}
+    bar = int(cfg.get("min_quality", 60) or 0)
+    if q and bar and q.get("score", 100) < bar and not r.get("approved"):
+        first = (q.get("reasons") or ["it reads weak"])[0]
+        return f"quality {q.get('score')}/100 is below your bar {bar} — {first}"
     if not _as_text(r.get("apply_email")).strip():
         return f"{_NO_EMAIL} — portal applications still need you"
     return ""
 
 
 PORTAL_TRIES = 3
+
+
+def _portal_brief(res: dict) -> dict:
+    """What a role keeps of its last form attempt: enough to show what
+    happened and what it learned, not every box it read."""
+    keep = ("ok", "state", "message", "url", "form_url", "ats", "answers", "filled", "left",
+            "paste_pack", "steps", "learned", "engine_turns", "pages", "explored",
+            "waited_for_you", "apply_email", "site", "missing", "workday", "companion")
+    return {k: res[k] for k in keep if k in res}
 _PORTAL_WAITING = ("filled", "needs_answer", "unknown_form", "needs_login",
                    "needs_captcha")
 
@@ -790,10 +1054,45 @@ def auto_readiness() -> dict:
     if cfg.get("dry_run", True):
         blockers.append({"what": "Rehearsal is on, so nothing is ever sent",
                          "fix": "Untick 'Rehearsal' once you've read a few drafts."})
+    forms_on = str(cfg.get("portal_mode", "prepare")).lower() != "off" and cfg.get("deliver", True)
+    mail = outreach.load_config()
     if not outreach.is_configured():
-        blockers.append({"what": "No email account is set up",
-                         "fix": "Add your SMTP details in Agent Jo's Outreach "
-                                "panel — without them nothing can be sent."})
+        item = {"what": "No email account is set up, so emailed applications can't be sent",
+                "fix": "Auto-apply → Sending email: your address and its password (an app "
+                       "password for Gmail). Then Send a test.", "where": "auto"}
+        if forms_on:
+            notes.append(item["what"] + " — company forms still work. " + item["fix"])
+        else:
+            blockers.append(item)
+    elif not mail.get("enabled"):
+        blockers.append({"what": "Sending from your email account is switched off",
+                         "fix": "Auto-apply → Sending email → switch it on.", "where": "auto"})
+    if forms_on:
+        try:
+            from . import portal
+            pr = portal.readiness(portal.with_contact(profile()))
+            if not pr["ready"]:
+                blockers.append({"what": "Company forms need " + ", ".join(pr["missing"]),
+                                 "fix": "Your profile → Contact details (forms ask for these every time).",
+                                 "where": "profile"})
+        except Exception:
+            pass
+        if str(cfg.get("portal_mode")) == "prepare":
+            notes.append("Company forms are filled and left open for you to press Submit. "
+                         "Choose the Full level to have them submitted.")
+    try:
+        from . import answerbank
+        waiting = answerbank.open_questions()
+        if waiting:
+            held_up = len({k for q in waiting for k in (q.get("roles") or [])})
+            notes.append(f"{len(waiting)} question(s) only you can answer are holding up "
+                         f"{held_up} application(s) — Answers → Waiting on you.")
+    except Exception:
+        pass
+    st = settling_in(cfg)
+    if st["on"]:
+        notes.append(f"Settling in: the first days live run at most {SETTLE_CAP} applications a day "
+                     f"({st['days_left']} day(s) left) so you can read the first real ones.")
     try:
         if outreach._is_draft_only():
             blockers.append({"what": "Observe mode is on across the agent",
@@ -816,7 +1115,10 @@ def auto_readiness() -> dict:
             reasons[g] = reasons.get(g, 0) + 1
         else:
             sendable += 1
-    room = max(0, int(cfg.get("daily_cap", 5)) - _sent_today())
+    _cap = int(cfg.get("daily_cap", 5))
+    if settling_in(cfg)["on"]:
+        _cap = min(_cap, SETTLE_CAP)
+    room = max(0, _cap - _sent_today())
     if not roles_all:
         blockers.append({"what": "No roles are being tracked",
                          "fix": "Search, or add a source and let it find some."})
@@ -829,6 +1131,7 @@ def auto_readiness() -> dict:
                      f"{cfg.get('daily_cap', 5)} is used up.")
 
     return {"ok": not blockers,
+            "settling_in": st,
             "will_send": (0 if blockers else min(sendable, room)),
             "sendable": sendable, "room_today": room,
             "blockers": blockers, "notes": notes,
@@ -872,9 +1175,18 @@ def auto_apply(brain, model=None, limit: int | None = None) -> dict:
         return {"ok": False, "error": "An auto-apply run is already going. "
                                       "Wait for it to finish, then run again."}
     try:
-        return _auto_apply(brain, model, limit, cfg)
+        res = _auto_apply(brain, model, limit, cfg)
     finally:
         _RUN_LOCK.release()
+    if not _IN_CYCLE.get("on"):
+        try:
+            _record_run(res, "apply")
+        except Exception:
+            pass
+    return res
+
+
+_IN_CYCLE: dict = {}
 
 
 def _fit_of(r: dict) -> int:
@@ -890,8 +1202,11 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
     mode = str(cfg.get("portal_mode", "prepare")).lower()
     sent, held, errors, prepared = [], [], [], []
     cap = int(cfg.get("daily_cap", 5))
-    room = max(0, cap - _sent_today())
     portal_room = max(0, int(cfg.get("portal_per_run", 5) or 0))
+    settle = settling_in(cfg)
+    if settle["on"]:
+        cap, portal_room = min(cap, SETTLE_CAP), min(portal_room, SETTLE_CAP)
+    room = max(0, cap - _sent_today())
     todo = [r for r in roles() if r.get("stage") in ("found", "drafted")]
     if limit:
         todo = todo[:limit]
@@ -934,6 +1249,15 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                     _engine_failed(r, d["error"])
                     continue
                 streak = 0
+                q = (d.get("draft") or {}).get("quality") or {}
+                if q and q.get("score", 100) < int(cfg.get("min_quality", 60)):
+                    # once more, told exactly what was weak
+                    from . import quality as _q
+                    d2 = draft_application(key, brain, model=model, fix=_q.instructions(q))
+                    if d2.get("ok"):
+                        q2 = (d2.get("draft") or {}).get("quality") or {}
+                        update_role(key, redrafted_for_quality={"before": q.get("score"),
+                                                                "after": q2.get("score")})
         except Exception as exc:
             failed.add(key)
             errors.append(f"{r.get('title', '?')}: {type(exc).__name__}: {exc}")
@@ -943,8 +1267,20 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
 
     # --- 2. deliver, best fit first, so the day's cap goes to the strongest --
     ready = [get_role(r["key"]) for r in todo if r["key"] not in failed]
+    if not cfg.get("deliver", True):
+        # "Draft only": everything is scored and drafted for you to review;
+        # nothing is sent, rehearsed or opened
+        for r in ready:
+            if r and r.get("stage") in ("found", "drafted") and _fit_of(r) >= floor \
+                    and (r.get("draft") or {}).get("body"):
+                held.append({"key": r["key"], "title": r["title"],
+                             "company": r.get("company", ""),
+                             "reason": "drafted for you to review (Draft only)"})
+        ready = []
     ready = [r for r in ready if r and r.get("stage") in ("found", "drafted")]
-    ready.sort(key=lambda r: -_fit_of(r))
+    # best fit first; among roles of about the same fit, the freshest — an
+    # application in the first days is read, one in week three often isn't
+    ready.sort(key=lambda r: (-(_fit_of(r) // 5), days_listed(r)))
     for i, r in enumerate(ready, 1):
         key = r["key"]
         _note("Applying", i, len(ready), r.get("title", ""))
@@ -979,25 +1315,45 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                            "message": f"{type(exc).__name__}: {exc}"}
                 portal_room -= 1
                 state = res.get("state", "")
-                update_role(key, portal=res, portal_at=_iso(),
+                update_role(key, portal=_portal_brief(res), portal_at=_iso(),
                             portal_attempts=(int(r.get("portal_attempts") or 0)
                                              + 1 if state == "failed" else 0))
+                if state == "closed":
+                    # the advert said so: closed with the reason, never retried.
+                    # Nothing was left open for you, so it doesn't use up the
+                    # run's room for forms
+                    portal_room += 1
+                    mark_closed(key, str(res.get("message") or "the advert says it's closed")[:200])
+                    held.append({**row, "reason": "the advert says the role is closed — moved to closed"})
+                    continue
+                if state == "apply_by_email" and res.get("apply_email"):
+                    # no form, an address: the next run applies by email, through
+                    # every check an emailed application passes
+                    portal_room += 1
+                    update_role(key, apply_email=res["apply_email"], portal_at="")
+                    held.append({**row, "reason": f"the advert asks for email to {res['apply_email']} "
+                                                  f"— the next run sends it that way"})
+                    continue
                 if state == "submitted":
                     room -= 1
                     update_role(key, sent_at=_iso(), sent_dry_run=False)
                     set_stage(key, "applied", "submitted via portal")
-                    sent.append({**row, "to": "portal", "dry_run": False})
+                    sent.append({**row, "to": "portal", "dry_run": False,
+                                 "learned": (res.get("learned") or [])[:4]})
                 elif state == "failed":
                     errors.append(f"{r['title']}: portal: "
                                   + str(res.get("message") or "the form failed"))
                 else:
                     answers = res.get("answers") or []
+                    needs = [a["question"] for a in answers if a.get("source") != "engine"]
+                    needs += [x for x in (res.get("left") or []) if x not in needs]
                     prepared.append({
                         **row, "state": state, "url": r.get("url", ""),
                         "answered": len([a for a in answers
                                          if a.get("source") == "engine"]),
-                        "needs_you": [a["question"] for a in answers
-                                      if a.get("source") != "engine"],
+                        "needs_you": needs[:12],
+                        "learned": (res.get("learned") or [])[:4],
+                        "engine_turns": res.get("engine_turns"),
                         "message": res.get("message", ""),
                         "rehearsal": dry and mode == "submit"})
                 continue
@@ -1047,6 +1403,33 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
             "dry_run": dry, "remaining_today": room}
 
 
+PREP_PER_RUN = 2
+
+
+def prepare_interviews(brain, model=None, limit: int = PREP_PER_RUN) -> list:
+    """Interview prep for every role at the interview stage that has none yet.
+
+    Uses your CV and profile only; questions with nothing to draw on come back
+    as gaps, never invented answers (agent/cv.py). A couple per run, so one
+    good week doesn't spend the engine budget at once."""
+    from . import cv as cvmod
+    done = []
+    for r in roles():
+        if len(done) >= limit:
+            break
+        if r.get("stage") != "interview" or (r.get("interview") or {}).get("questions"):
+            continue
+        _note("Preparing for an interview", title=r.get("title", ""))
+        res = cvmod.interview_prep(r, profile(), brain, model=model)
+        if res.get("ok"):
+            update_role(r["key"], interview=res)
+            done.append({"key": r["key"], "title": r.get("title", ""),
+                         "company": r.get("company", ""),
+                         "questions": len(res.get("questions") or []),
+                         "gaps": len(res.get("gaps") or [])})
+    return done
+
+
 def describe_run(r: dict) -> str:
     """One line saying what a run did, for the window and the log."""
     if not r.get("ok", True) and r.get("error"):
@@ -1054,6 +1437,12 @@ def describe_run(r: dict) -> str:
     bits = []
     if r.get("discovered") is not None:
         bits.append(f"{r.get('discovered') or 0} new role(s) found")
+    if r.get("replies"):
+        bits.append(f"{r['replies']} repl(y/ies) to your applications read")
+    if r.get("interview_prep"):
+        bits.append(f"interview prep ready for {len(r['interview_prep'])} role(s)")
+    if r.get("digest"):
+        bits.append(f"weekly digest sent to {r['digest']}")
     n_sent = len(r.get("sent") or [])
     bits.append(f"{n_sent} sent" + (" (rehearsal — nothing left this machine)"
                                     if r.get("dry_run") and n_sent else ""))
@@ -1503,36 +1892,72 @@ def _parse_browser_kind(text: str) -> list:
 
 
 # --- company hiring systems ------------------------------------------------ #
-# Greenhouse, Lever and Ashby publish each company's open roles as JSON, for
-# exactly this purpose: one documented address per company, nothing scraped,
-# no login. A role you've tracked that links to one of them is a door to
-# every role that company lists — which is where "find more sources" finds
-# new ones once the fixed catalogue has been used up.
+# Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee, Workday,
+# BambooHR, Personio and Teamtailor publish each company's open roles in a
+# machine-readable form, for exactly this purpose: one documented address
+# per company, nothing scraped, no login. A role you've tracked that links to
+# one of them is a door to every role that company lists, and so is a
+# company's careers page that embeds one (boards.find_boards) — which is
+# where "find more sources" finds new ones once the fixed catalogue has been
+# used up.
 _ATS_ROLE_URL = (
+    # a careers page's embed names the board by ?for=
+    ("greenhouse", re.compile(r"greenhouse\.io/embed/job_board(?:/js)?\?(?:[^\"'\s]*&)?for=([A-Za-z0-9_-]+)",
+                              re.I)),
     ("greenhouse", re.compile(
         r"(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/"
         r"(?:embed/job_app\?for=)?([A-Za-z0-9_-]+)", re.I)),
     ("lever", re.compile(r"jobs\.(?:eu\.)?lever\.co/([A-Za-z0-9_.-]+)", re.I)),
     ("ashby", re.compile(r"jobs\.ashbyhq\.com/([A-Za-z0-9_.%-]+)", re.I)),
+    ("workable", re.compile(r"apply\.workable\.com/(?:api/v\d/(?:widget/)?accounts/)?([A-Za-z0-9_-]+)", re.I)),
+    ("workable", re.compile(r"//(?!apply\.|www\.)([a-z0-9-]+)\.workable\.com", re.I)),
+    ("smartrecruiters", re.compile(r"(?:jobs|careers)\.smartrecruiters\.com/([A-Za-z0-9_-]+)", re.I)),
+    ("smartrecruiters", re.compile(r"api\.smartrecruiters\.com/v1/companies/([A-Za-z0-9_-]+)", re.I)),
+    ("recruitee", re.compile(r"//([a-z0-9-]+)\.recruitee\.com", re.I)),
+    ("bamboohr", re.compile(r"//([a-z0-9-]+)\.bamboohr\.com", re.I)),
+    ("personio", re.compile(r"//([a-z0-9-]+)\.jobs\.personio\.(?:de|com)", re.I)),
+    ("rss", re.compile(r"//([a-z0-9-]+)\.teamtailor\.com", re.I)),
 )
 _ATS_API = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{}/jobs?content=true",
     "lever": "https://api.lever.co/v0/postings/{}?mode=json",
     "ashby": "https://api.ashbyhq.com/posting-api/job-board/{}",
+    "workable": "https://apply.workable.com/api/v1/widget/accounts/{}",
+    "smartrecruiters": "https://api.smartrecruiters.com/v1/companies/{}/postings?limit=100",
+    "recruitee": "https://{}.recruitee.com/api/offers/",
+    "bamboohr": "https://{}.bamboohr.com/careers/list",
+    "personio": "https://{}.jobs.personio.de/xml",
+    "rss": "https://{}.teamtailor.com/jobs.rss",
 }
 _ATS_API_SLUG = {
     "greenhouse": re.compile(r"/boards/([^/?#]+)/jobs", re.I),
     "lever": re.compile(r"/postings/([^/?#]+)", re.I),
     "ashby": re.compile(r"/job-board/([^/?#]+)", re.I),
+    "workable": re.compile(r"/accounts/([^/?#]+)", re.I),
+    "smartrecruiters": re.compile(r"/companies/([^/?#]+)", re.I),
+    "recruitee": re.compile(r"//([^./]+)\.recruitee\.com", re.I),
+    "bamboohr": re.compile(r"//([^./]+)\.bamboohr\.com", re.I),
+    "personio": re.compile(r"//([^./]+)\.jobs\.personio", re.I),
+    "workday": re.compile(r"/wday/cxs/([^/?#]+)/", re.I),
 }
-_ATS_NOT_A_COMPANY = {"embed", "jobs", "job", "careers", "v1", "api"}
+_ATS_NOT_A_COMPANY = {"embed", "jobs", "job", "careers", "v1", "api", "j", "www", "apply", "app",
+                      "static", "assets", "cdn", "help", "support", "en", "oneclick-ui"}
+# Workday: https://<tenant>.wd<n>.myworkdayjobs.com/[<locale>/]<site>/job/...
+_WORKDAY_URL = re.compile(r"//([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}(?:-[A-Za-z]{2})?/)?"
+                          r"([A-Za-z0-9_-]+)", re.I)
 
 
 def ats_board_for(url: str):
-    """(kind, company slug, API address) for a role hosted on Greenhouse,
-    Lever or Ashby; None for anything else."""
+    """(kind, company slug, feed address) for a role or a careers page on a
+    hiring system that publishes its roles; None for anything else."""
+    u = str(url or "")
+    m = _WORKDAY_URL.search(u)
+    # the site's own name ("Careers", "External") is the board, not a word to skip
+    if m and m.group(3).lower() not in {"wday", "job", "details", "login", "userhome"}:
+        tenant, wd, site = m.group(1), m.group(2), m.group(3)
+        return "workday", tenant, f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
     for kind, rx in _ATS_ROLE_URL:
-        m = rx.search(str(url or ""))
+        m = rx.search(u)
         if m and m.group(1).lower() not in _ATS_NOT_A_COMPANY:
             slug = m.group(1)
             return kind, slug, _ATS_API[kind].format(slug)
@@ -1540,7 +1965,8 @@ def ats_board_for(url: str):
 
 
 def _ats_company(kind: str) -> str:
-    m = _ATS_API_SLUG[kind].search(_CURRENT_SOURCE_URL.get("url") or "")
+    rx = _ATS_API_SLUG.get(kind)
+    m = rx.search(_CURRENT_SOURCE_URL.get("url") or "") if rx else None
     slug = m.group(1) if m else ""
     return " ".join(w.capitalize() for w in re.split(r"[-_.]+", slug) if w)
 
@@ -1589,10 +2015,163 @@ def _parse_ashby(text: str) -> list:
             if isinstance(j, dict) and j.get("isListed", True)]
 
 
+def _first(*vals) -> str:
+    for v in vals:
+        if v not in (None, "", [], {}):
+            return str(v)
+    return ""
+
+
+def _parse_workable(text: str) -> list:
+    data = json.loads(text)
+    company = str(data.get("name") or "") or _ats_company("workable")
+    out = []
+    for j in data.get("jobs") or []:
+        if not isinstance(j, dict):
+            continue
+        locs = j.get("locations") or []
+        loc0 = locs[0] if locs and isinstance(locs[0], dict) else {}
+        where = ", ".join(x for x in (_first(j.get("city"), loc0.get("city")),
+                                      _first(j.get("country"), loc0.get("country"))) if x)
+        out.append(_ats_job("workable", company, j.get("title"),
+                            _first(j.get("url"), j.get("shortlink"), j.get("application_url")),
+                            where, _strip_html(_first(j.get("description"), j.get("full_description"))),
+                            remote=bool(j.get("telecommuting") or j.get("remote"))))
+    return out
+
+
+def _parse_smartrecruiters(text: str) -> list:
+    data = json.loads(text)
+    out = []
+    for j in data.get("content") or []:
+        if not isinstance(j, dict):
+            continue
+        comp = j.get("company") or {}
+        ident = _first(comp.get("identifier"), _ats_company("smartrecruiters").replace(" ", ""))
+        loc = j.get("location") or {}
+        url = _first(j.get("postingUrl"), j.get("applyUrl"),
+                     f"https://jobs.smartrecruiters.com/{ident}/{j.get('id', '')}" if j.get("id") else "")
+        out.append(_ats_job("smartrecruiters", _first(comp.get("name"), ident), j.get("name"), url,
+                            _first(loc.get("fullLocation"),
+                                   ", ".join(x for x in (loc.get("city"), str(loc.get("country") or "").upper())
+                                             if x)),
+                            _strip_html(_first(j.get("jobAd"), "")), remote=bool(loc.get("remote"))))
+    return out
+
+
+def _parse_recruitee(text: str) -> list:
+    data = json.loads(text)
+    out = []
+    for j in data.get("offers") or []:
+        if not isinstance(j, dict):
+            continue
+        out.append(_ats_job("recruitee", _first(j.get("company_name"), _ats_company("recruitee")),
+                            j.get("title"), _first(j.get("careers_url"), j.get("url")),
+                            _first(j.get("location"), ", ".join(x for x in (j.get("city"), j.get("country")) if x)),
+                            _strip_html(_first(j.get("description"), "") + " " + _first(j.get("requirements"), "")),
+                            remote=bool(j.get("remote"))))
+    return out
+
+
+def _parse_workday(text: str) -> list:
+    data = json.loads(text)
+    src = _CURRENT_SOURCE_URL.get("url") or ""
+    m = re.search(r"https?://([^/]+)/wday/cxs/([^/]+)/([^/?#]+)", src)
+    host, site = (m.group(1), m.group(3)) if m else ("", "")
+    company = " ".join(w.capitalize() for w in re.split(r"[-_.]+", m.group(2)) if w) if m else ""
+    out = []
+    for j in data.get("jobPostings") or []:
+        if not isinstance(j, dict) or not j.get("title"):
+            continue
+        path = str(j.get("externalPath") or "")
+        url = f"https://{host}/{site}{path}" if host and path else ""
+        out.append(_ats_job("workday", company, j.get("title"), url, _first(j.get("locationsText"), ""),
+                            " ".join(str(x) for x in j.get("bulletFields") or []),
+                            remote="remote" in str(j.get("locationsText") or "").lower()))
+    return out
+
+
+def _parse_bamboohr(text: str) -> list:
+    data = json.loads(text)
+    src = _CURRENT_SOURCE_URL.get("url") or ""
+    m = re.search(r"https?://([^./]+)\.bamboohr\.com", src)
+    sub = m.group(1) if m else ""
+    company = _ats_company("bamboohr")
+    out = []
+    for j in data.get("result") or []:
+        if not isinstance(j, dict):
+            continue
+        loc = j.get("location") or {}
+        ats_loc = j.get("atsLocation") or {}
+        where = ", ".join(x for x in (_first(loc.get("city"), ats_loc.get("city")),
+                                      _first(ats_loc.get("country"), loc.get("state"))) if x)
+        url = f"https://{sub}.bamboohr.com/careers/{j.get('id')}" if sub and j.get("id") else ""
+        out.append(_ats_job("bamboohr", company, j.get("jobOpeningName"), url, where,
+                            " ".join(x for x in (j.get("departmentLabel"), j.get("employmentStatusLabel")) if x),
+                            remote=bool(j.get("isRemote"))))
+    return out
+
+
+def _parse_personio(text: str) -> list:
+    from xml.etree import ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except Exception:
+        return []
+    src = _CURRENT_SOURCE_URL.get("url") or ""
+    m = re.search(r"https?://([^/]+\.jobs\.personio\.(?:de|com))", src)
+    host = m.group(1) if m else ""
+    company = _ats_company("personio")
+    out = []
+    for pos in root.iter("position"):
+        get = lambda tag: (pos.findtext(tag) or "").strip()
+        body = " ".join((jd.findtext("value") or "") for jd in pos.iter("jobDescription"))
+        url = f"https://{host}/job/{get('id')}" if host and get("id") else ""
+        out.append(_ats_job("personio", _first(get("subcompany"), company), get("name"), url, get("office"),
+                            _strip_html(body), remote="remote" in get("office").lower()))
+    return out
+
+
 _PARSERS = {"remotive": _parse_remotive, "remoteok": _parse_remoteok,
             "rss": _parse_jobs_rss, "html": _parse_html_kind,
             "browser": _parse_browser_kind, "greenhouse": _parse_greenhouse,
-            "lever": _parse_lever, "ashby": _parse_ashby}
+            "lever": _parse_lever, "ashby": _parse_ashby,
+            "workable": _parse_workable, "smartrecruiters": _parse_smartrecruiters,
+            "recruitee": _parse_recruitee, "workday": _parse_workday,
+            "bamboohr": _parse_bamboohr, "personio": _parse_personio}
+
+
+def _fetch_workday(url: str, pages: int = 3) -> str:
+    """Workday's careers sites answer a POST, twenty roles at a time; the
+    first few pages are read and handed on as one."""
+    if JOB_FETCHER is not None:
+        return JOB_FETCHER(url)
+    import httpx
+    _pace(url)
+    posts, total = [], 0
+    headers = {**BROWSER_HEADERS, "Accept": "application/json", "Content-Type": "application/json",
+               "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+    with httpx.Client(follow_redirects=True, timeout=25.0, headers=headers) as c:
+        for n in range(pages):
+            r = c.post(url, json={"appliedFacets": {}, "limit": 20, "offset": 20 * n, "searchText": ""})
+            r.raise_for_status()
+            data = r.json()
+            total = int(data.get("total") or total or 0)
+            got = data.get("jobPostings") or []
+            posts.extend(got)
+            if len(got) < 20 or len(posts) >= total:
+                break
+    return json.dumps({"total": total, "jobPostings": posts})
+
+
+def fetch_for_kind(url: str, kind: str) -> str:
+    """Fetch a source the way its kind needs: rendered in the browser, a
+    Workday POST, or a plain request."""
+    if kind == "browser":
+        return fetch_with_browser(url)
+    if kind == "workday":
+        return _fetch_workday(url)
+    return _fetch_source(url)
 
 
 def looks_like_html(text: str) -> bool:
@@ -1699,7 +2278,7 @@ def draft_follow_up(key: str, brain, model=None) -> dict:
         kw = {"model": model} if model else {}
         data = _json_from(brain.chat(
             [{"role": "user", "content": payload}],
-            [_FOLLOWUP_SYSTEM.format(days=days)], None, **kw))
+            [_FOLLOWUP_SYSTEM.format(days=days) + _style_clause(("length",))], None, **kw))
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     body = _as_text(data.get("body"))
@@ -1746,15 +2325,47 @@ def save_application_file(key: str) -> dict:
 ATS_FLOOR = 25          # below this, a screener would drop it anyway
 
 
+def _advert_text(role: dict) -> str:
+    return " ".join(_as_text((role or {}).get(k)) for k in
+                    ("title", "summary", "description", "location")).lower()
+
+
+def deal_breaker(role: dict, p: dict = None) -> str:
+    """The first of your deal-breakers the advert states, or ''.
+
+    The profile had deal_breakers and must_haves from the start and nothing
+    read them: "no commission-only", "no night shift" sat there while
+    auto-apply applied to exactly those. Matched as whole words or phrases."""
+    p = p if p is not None else profile()
+    text = _advert_text(role)
+    for d in _as_list(p.get("deal_breakers")):
+        d = d.strip().lower()
+        if d and re.search(r"(?<![a-z0-9])" + re.escape(d) + r"(?![a-z0-9])", text):
+            return d
+    return ""
+
+
+def must_haves_missing(role: dict, p: dict = None) -> list:
+    """Your must-haves the advert doesn't mention. Adverts leave things out,
+    so this is shown, not used to reject."""
+    p = p if p is not None else profile()
+    text = _advert_text(role)
+    return [m for m in _as_list(p.get("must_haves")) if m.strip() and m.strip().lower() not in text]
+
+
 def prescreen(role: dict, p: dict = None) -> dict:
     """A free keyword check before any engine call.
 
     Scoring a role costs a request; the keyword comparison costs nothing and
     catches the obviously-wrong ones. On a scan that finds forty roles this is
     the difference between forty paid calls and a handful."""
+    p = p if p is not None else profile()
+    hit = deal_breaker(role, p)
+    if hit:
+        return {"pass": False, "score": None, "why": f"deal-breaker: “{hit}” is in the advert"}
     try:
         from . import cv as cvmod
-        s = cvmod.ats_scan(role, p if p is not None else profile())
+        s = cvmod.ats_scan(role, p)
     except Exception:
         return {"pass": True, "score": None, "why": ""}
     if s.get("total_terms", 0) < 3:
@@ -1800,13 +2411,47 @@ def auto_cycle(brain, model=None) -> dict:
                         ats=ps["score"])
             screened += 1
     out["screened_out"] = screened
+    # replies first: a role that has had an answer shouldn't be chased
+    try:
+        from . import inbox
+        if inbox.settings().get("enabled") or any(inbox.replies_dir().glob("*.eml")):
+            _note("Reading replies to your applications")
+            ib = inbox.check()
+            out["replies"] = len(ib.get("found") or [])
+            if ib.get("error") or ib.get("warning"):
+                out["errors"].append("inbox: " + (ib.get("error") or ib.get("warning")))
+    except Exception as exc:
+        out["errors"].append(f"inbox: {type(exc).__name__}: {exc}")
+    # the people behind the replies, and roles at companies where you know one
+    try:
+        from . import contacts
+        contacts.sync()
+        out["known_people_roles"] = contacts.flag_roles()
+    except Exception as exc:
+        out["errors"].append(f"contacts: {type(exc).__name__}: {exc}")
+    # an interview invitation deserves preparation before you open the email
+    try:
+        out["interview_prep"] = prepare_interviews(brain, model)
+    except Exception as exc:
+        out["errors"].append(f"interview prep: {type(exc).__name__}: {exc}")
+    # a weekly backup, so a dead disk doesn't take the job search with it
+    try:
+        from . import backup
+        if backup.weekly_due():
+            out["backup"] = backup.make("weekly")["filename"]
+    except Exception as exc:
+        out["errors"].append(f"backup: {type(exc).__name__}: {exc}")
     _note("Checking which adverts have closed")
     try:
         sw = sweep_expired(limit=8)
         out["expired"] = len(sw.get("closed") or [])
     except Exception:
         out["expired"] = 0
-    res = auto_apply(brain, model=model)
+    _IN_CYCLE["on"] = True
+    try:
+        res = auto_apply(brain, model=model)
+    finally:
+        _IN_CYCLE["on"] = False
     # the prepared forms and the shared cause were dropped here, so a
     # scheduled run never reported the portal work it had done
     out.update({k: res.get(k) for k in
@@ -1817,7 +2462,20 @@ def auto_cycle(brain, model=None) -> dict:
     if not res.get("ok"):
         out["error"] = res.get("error", "")
         out["ok"] = True              # the finding still happened
+    try:
+        from . import digest
+        dg = digest.send()
+        if dg.get("sent"):
+            out["digest"] = dg.get("to")
+        elif not dg.get("ok"):
+            out["errors"].append("weekly digest: " + dg.get("error", ""))
+    except Exception as exc:
+        out["errors"].append(f"weekly digest: {type(exc).__name__}: {exc}")
     out["summary"] = describe_run(out)
+    try:
+        _record_run(out, "cycle")
+    except Exception:
+        pass
     return out
 
 
@@ -1981,8 +2639,7 @@ def _fetch_all(query: str = "") -> tuple[list, list, dict]:
             kind = src.get("kind", "rss")
             parser = _PARSERS.get(kind, _parse_jobs_rss)
             _CURRENT_SOURCE_URL["url"] = url
-            text = (fetch_with_browser(url) if kind == "browser"
-                    else _fetch_source(url))
+            text = fetch_for_kind(url, kind)
             jobs = [j for j in parser(text) if j.get("title")]
             # A feed parser handed a web page returns nothing and says
             # nothing — the source then sits on "pending" for ever. Say what
