@@ -67,6 +67,19 @@ async function load() {
   $("#level").textContent = s.level_says || "";
   main.innerHTML = "";
 
+  if ((s.needs_you || []).length) {
+    main.appendChild(el("h2", "", "Needs you at the computer"));
+    s.needs_you.forEach((a) => {
+      const c = el("div", "card");
+      c.appendChild(el("h3", "", a.headline || "An application is waiting for you"));
+      const ol = el("ol");
+      (a.steps || []).forEach((t) => ol.appendChild(el("li", "", t)));
+      c.appendChild(ol);
+      if (a.then) c.appendChild(el("p", "muted", a.then));
+      main.appendChild(c);
+    });
+  }
+
   if ((s.interviews || []).length) {
     main.appendChild(el("h2", "", "Interviews"));
     s.interviews.forEach((x) => {

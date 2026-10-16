@@ -99,7 +99,7 @@ def deepseek_flash_key():
 # Stamped when this build was packaged. Surfaced in problem reports so
 # "is the fix actually running?" is answerable at a glance — replacing
 # files without restarting the app has burned us more than once.
-BUILD_ID = "2026-10-15 12:10 UTC"
+BUILD_ID = "2026-10-16 19:55 UTC"
 
 MAX_TOKENS = int(os.environ.get("AGENT_MAX_TOKENS", "8192"))
 # Ollama context window (prompt + reply budget). Ollama defaults this to only

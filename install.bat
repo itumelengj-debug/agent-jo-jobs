@@ -9,6 +9,7 @@ REM parenthesised blocks).
 setlocal
 title Agent Jo Jobs - install
 cd /d "%~dp0"
+echo "%CD%" | findstr /i /c:"\AppData\Local\Temp\" >nul && echo "%CD%" | findstr /i /c:".zip" >nul && goto in_zip
 echo.
 echo   Agent Jo Jobs - install
 echo   Folder: %CD%
@@ -87,6 +88,18 @@ exit /b 1
 echo.
 echo   Python is installed, but this window can't see it yet.
 echo   Close this window and run install.bat again.
+pause
+exit /b 1
+
+:in_zip
+echo.
+echo   This is running from inside the zip file, so Windows is using a
+echo   temporary copy that it deletes later. Nothing set up here will last.
+echo.
+echo   1. Close this window.
+echo   2. Right-click the zip, choose Extract All, pick a folder such as Documents.
+echo   3. In the extracted folder, double-click install.bat.
+echo.
 pause
 exit /b 1
 

@@ -244,7 +244,9 @@ def add_roles(found: list) -> dict:
         })
         have.add(key)
         added += 1
-    save_roles(rs[-200:])
+    # every role is kept: trimming to the newest 200 here silently deleted
+    # older ones, applications and replies included
+    save_roles(rs)
     _audit("found", f"{added} new role(s)")
     return {"ok": True, "added": added, "total": len(roles())}
 

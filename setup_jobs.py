@@ -23,6 +23,16 @@ VENV = HERE / ".venv"
 LOG = HERE / "install.log"
 
 
+# an install that was cut short can leave a package without one it needs
+# (fastapi without annotated-doc): pip check names them, and they're added
+FILL_GAPS = (
+    "import re,subprocess,sys;"
+    "o=subprocess.run([sys.executable,'-m','pip','check'],capture_output=True,text=True).stdout;"
+    "m=sorted(set(re.findall(r'requires ([A-Za-z0-9_.\\-]+), which is not installed',o)));"
+    "print('missing:',m or 'none');"
+    "sys.exit(subprocess.run([sys.executable,'-m','pip','install',*m,'--quiet']).returncode if m else 0)")
+
+
 def venv_python() -> Path:
     return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
@@ -43,6 +53,7 @@ def steps() -> list:
         ("Updating pip", [str(py), "-m", "pip", "install", "--upgrade", "pip", "--quiet"], False),
         ("Installing its packages (a few minutes the first time)",
          [str(py), "-m", "pip", "install", "-r", str(HERE / "requirements.txt"), "--quiet"], True),
+        ("Checking nothing it needs is missing", [str(py), "-c", FILL_GAPS], False),
         ("Checking it loads", [str(py), "-c", "import jobs.server"], True),
         ("Downloading the browser for portal applications (about 150 MB)",
          [str(py), "-m", "playwright", "install", "chromium"], False),

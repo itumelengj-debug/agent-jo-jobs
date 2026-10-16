@@ -94,7 +94,10 @@ def main() -> int:
     srv = (ROOT / "jobs" / "server.py").read_text("utf-8")
     js_ = (ROOT / "web_jobs" / "jobs.js").read_text("utf-8")
     routes = set(re.findall(r'@app\.(?:get|post|delete)\("(/api/jobs[^"]*)"', srv))
-    used = set(re.findall(r'"(/api/jobs[a-z0-9/_-]*)"', js_))
+    # read a call with its query string ("/api/jobs/mock?key=") and a dotted
+    # name (interview.ics) too: those were reported missing though the
+    # window calls them
+    used = set(re.findall(r'["`](/api/jobs[a-z0-9/_.\-]*)(?:\?[^"`]*)?["`]', js_))
     # a route with a path parameter is called as a template literal, so match
     # it by its fixed prefix rather than the literal "{key}"
     missing = set()
@@ -105,7 +108,8 @@ def main() -> int:
             continue
         missing.add(r)
     check("ui.every_user_facing_endpoint_has_a_ui",
-          missing <= {"/api/jobs/alerts/ingest"}, f"{sorted(missing)}")
+          missing <= {"/api/jobs/alerts/ingest", "/api/jobs/resume/file"},  # resume/file: a link the server hands back
+          f"{sorted(missing)}")
     check("ui.reads_never_carry_a_body", 'verb === "GET" ? { method: "GET" }' in js_)
 
     # --- the icon travels with it ---------------------------------------

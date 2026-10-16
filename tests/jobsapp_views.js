@@ -52,14 +52,23 @@ const navs = views.map((v) => { const n = node("nav-" + v); n.dataset.view = v; 
 
 global.document = {
   readyState: "complete",
+  // the look's attributes live on <html> (data-skin, data-look), so the
+  // window reaches for these from its first line
+  documentElement: node("html"),
+  body: node("body"),
+  hidden: false,
   querySelector: (s) => store[s.replace("#", "")] || null,
   querySelectorAll: (s) => (s === ".nav" ? navs
     : s === ".view" ? views.map((v) => E("v-" + v))
     : s.startsWith("[data-bulk]") ? [] : []),
+  getElementById: (id) => store[id] || null,
   createElement: () => node(""),
-  addEventListener() {},
+  createTextNode: (t) => { const n = node(""); n.textContent = String(t); return n; },
+  addEventListener() {}, removeEventListener() {},
 };
-global.window = { open() {} };
+global.window = { open() {}, addEventListener() {}, removeEventListener() {},
+                  location: { href: "http://127.0.0.1:8766/", search: "", hash: "" },
+                  matchMedia: () => ({ matches: false, addEventListener() {} }) };
 // a real tick, not a synchronous call: the views load asynchronously and
 // checking before they resolve tests nothing
 const realSetTimeout = setTimeout;

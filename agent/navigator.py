@@ -51,6 +51,9 @@ MAX_LOOPS = 34            # page reads per application
 MAX_FORM_PAGES = 14       # pages of one form
 TIME_BUDGET_S = 420       # not counting time spent waiting for you
 DEFAULT_TURNS = 12        # engine steps per application
+MAX_ENGINE_TURNS = 30     # with refunds for turns that got somewhere
+RESCUES_PER_PAGE = 1      # a fresh look by the engine before giving up on a page
+INTERSTITIAL_WAIT_S = 25  # "checking your browser" screens usually clear themselves
 ACTIONS_PER_TURN = 5
 
 CLOSED = "closed"
@@ -664,6 +667,13 @@ _SUCCESS_TEXT = re.compile(
     r"thank(s| you) for (applying|your application|submitting)|application (has been |was )?"
     r"(received|submitted|sent|complete)|we('ve| have) received your application|"
     r"your application (has been|was) (received|submitted|sent)|successfully (applied|submitted)", re.I)
+# a holding screen in front of the site (bot check, redirect, loader). It is
+# waited out, never worked around: if it turns into a challenge, that's a
+# captcha and it's handed to you.
+_INTERSTITIAL = re.compile(
+    r"just a moment|checking (if the site connection is secure|your browser)|verifying (that )?you are "
+    r"(a )?human|please wait while (we|you are)|ddos protection|enable javascript and cookies to continue|"
+    r"one more step|redirecting( you)?\b|you are being redirected|loading\.\.\.|please stand by", re.I)
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _APPLY_BY_MAIL = re.compile(r"\b(apply|applications?|cv|c\.v\.|resume|résumé|curriculum vitae|send|e-?mail)\b",
                             re.I)
@@ -952,6 +962,8 @@ def page_kind(snap: dict) -> str:
     form = known >= 2 or (files and known >= 1) or len([c for c in controls if c.get("required")]) >= 3
     if snap.get("password") and not form:
         return "login"
+    if not form and is_interstitial(snap):
+        return "interstitial"
     head = " ".join(snap.get("headings") or [])
     text = f"{head} {snap.get('title', '')} {str(snap.get('text') or '')[:3000]}"
     if _SUCCESS_TEXT.search(text) and not form:
@@ -963,6 +975,25 @@ def page_kind(snap: dict) -> str:
     if snap.get("password"):
         return "login"
     return "advert"
+
+
+def is_interstitial(snap: dict) -> bool:
+    """A holding page: little on it but a 'checking your browser' or
+    'redirecting' line, and nothing to press."""
+    text = f"{snap.get('title', '')} {str(snap.get('text') or '')[:1500]}"
+    real = [b for b in snap.get("buttons") or [] if not b.get("banner")]
+    return bool(_INTERSTITIAL.search(text)) and len(text) < 1600 and len(real) <= 2
+
+
+def looks_unrendered(snap: dict) -> bool:
+    """A page read before its script drew it: no buttons, no boxes, no words."""
+    return not (snap.get("buttons") or snap.get("controls")) and len(str(snap.get("text") or "")) < 80
+
+
+def describe_action(a: dict) -> str:
+    t = str(a.get("tool") or "?")
+    bits = [t] + [f"{k}={str(a[k])[:40]}" for k in ("ref", "field", "result") if a.get(k)]
+    return " ".join(bits)
 
 
 def apply_email(snap: dict) -> str:
@@ -1185,6 +1216,17 @@ ENGINE_SYSTEM = (
     "details goes in a box (type) or ask for a question to be answered from the candidate's own "
     "profile (answer); the app does the typing.\n"
     "- Only use refs that appear in the page JSON. Don't repeat an action that failed.\n"
+    "\nHow to work, every turn:\n"
+    "1. Read LAST_TURNS first: each action you took and what actually happened. If something "
+    "didn't work, work out why from the page before trying anything else, and choose a different "
+    "route rather than repeating it.\n"
+    "2. Say what this page is (advert, form page N, a chooser, a modal, an error) and what stands "
+    "between it and the next step.\n"
+    "3. Plan the fewest actions that clear it, and say what you expect to see afterwards.\n"
+    "4. Prefer, in order: the box or button the PROBLEM names; visible error messages; required "
+    "boxes still empty; a tab, accordion or 'show more' that hides the rest; scrolling. A modal or "
+    "overlay sits in front of the page: deal with it (close or continue) first.\n"
+    "5. When you're unsure what a button does, don't press it: a wrong press can lose the form.\n"
     "- If the page says the job is closed, finish with done(result=\"closed\"). If this site has "
     "no form and asks for applications another way (an email address, say), finish with "
     "done(result=\"no_form\") and say how in \"why\".\n\n"
@@ -1198,7 +1240,8 @@ ENGINE_SYSTEM = (
     "  {\"tool\":\"note\",\"text\":\"…\"}  one sentence worth knowing the next time this site is "
     "used (how to reach the form, what it wants)\n"
     "  {\"tool\":\"done\",\"result\":\"form_ready|needs_you|no_form|closed\",\"why\":\"…\"}\n\n"
-    "Reply with JSON only: {\"thinking\":\"one or two sentences\",\"actions\":[ …at most "
+    "Reply with JSON only: {\"thinking\":\"what this page is, what blocks it, your plan\","
+    "\"expect\":\"what the page should show after your actions\",\"actions\":[ …at most "
     f"{ACTIONS_PER_TURN}… ]}}. A click that changes the page ends your turn; you'll see the new page."
 )
 
@@ -1239,6 +1282,8 @@ class Navigator:
         self.wait, self.key = bool(wait), str(session_key or "")
         self.turns_left = max(0, int(turns or 0)) if brain is not None else 0
         self.engine_turns = 0
+        self.engine_log: list = []         # what the engine did, and what really happened
+        self.rescued: dict = {}            # page fingerprint -> fresh looks spent on it
         self.engine_errors = 0
         self.budget_s = budget_s
         self.start = time.time()
@@ -1286,6 +1331,11 @@ class Navigator:
 
     def look(self) -> dict:
         snap = self.d.snapshot(self.page) or {}
+        for _ in range(2):                 # read too early: give its script a moment, once or twice
+            if not looks_unrendered(snap):
+                break
+            self._pause(1.5)
+            snap = self.d.snapshot(self.page) or {}
         snap["_form"] = page_kind(snap) == "form"
         self.snap = snap
         return snap
@@ -1299,6 +1349,46 @@ class Navigator:
         if newp is not None and newp is not self.page:
             self.page = newp
         return res
+
+    def _pause(self, seconds: float) -> None:
+        try:
+            _settle(self.page, int(seconds * 1000))
+        except Exception:
+            pass
+        try:
+            self.page.wait_for_timeout(int(seconds * 1000))
+        except Exception:
+            time.sleep(min(seconds, 0.05))
+
+    def _sit_out_interstitial(self) -> bool:
+        """Wait for a holding screen to clear by itself. True when it did."""
+        self.say("The site is checking the browser; waiting for it")
+        t0 = time.time()
+        while time.time() - t0 < INTERSTITIAL_WAIT_S:
+            self._pause(2.5)
+            snap = self.look()
+            if page_kind(snap) != "interstitial":
+                self.say("The check cleared by itself")
+                return True
+            if time.time() - t0 > 60:      # a fake clock in tests
+                break
+        return False
+
+    def _rescue(self, snap: dict, problem: str) -> bool:
+        """One more look by the engine at a page about to be given up on,
+        with everything already tried in front of it."""
+        fp = fingerprint(snap)
+        if self.brain is None or self.engine_errors >= 2 or self.rescued.get(fp, 0) >= RESCUES_PER_PAGE:
+            return False
+        if self.engine_turns >= MAX_ENGINE_TURNS:
+            return False
+        self.rescued[fp] = self.rescued.get(fp, 0) + 1
+        self.turns_left = max(self.turns_left, 1)
+        self.say("Stuck here, so it's taking a careful second look", "engine")
+        return self._engine(snap, "RESCUE: " + problem + " Everything tried so far is in LAST_TURNS and "
+                                  "DONE_SO_FAR and none of it worked. Look again at the whole page: a hidden "
+                                  "tab or section, a modal in front, a different button, a link lower down. "
+                                  "Pick something not yet tried, or finish with done(needs_you) and say why.")
 
     def ats_here(self) -> str:
         """The hiring system behind this page: its address, or the address of
@@ -1322,6 +1412,20 @@ class Navigator:
                 continue
             out.append(c)
         return out
+
+    def _needs_answers_message(self) -> str:
+        """Which boxes, for which job, and the two ways to deal with them."""
+        job = " at ".join(x for x in (str(self.role.get("title") or ""), str(self.role.get("company") or ""))
+                          if x.strip())
+        items = [x.replace(" (needs an answer)", "") for x in self.left[:6]]
+        listed = "\n".join(f"  • {x}" for x in items)
+        more = f"\n  …and {len(self.left) - 6} more" if len(self.left) > 6 else ""
+        return (f"Your answers are needed{' for ' + job if job else ''}. It filled everything else, "
+                f"and stopped at {'this question' if len(items) == 1 else 'these questions'}:\n"
+                f"{listed}{more}\n"
+                "Either answer them in the open browser window and submit it yourself, or answer them "
+                "once under Answers → Waiting on you: then this form, and every later one that asks, "
+                "is filled for you. Nothing was submitted.")
 
     def _over_budget(self) -> bool:
         return time.time() - self.start - self.waited > self.budget_s
@@ -1363,6 +1467,14 @@ class Navigator:
                     raise Stop(state, portal.handover_message(state))
                 self.say("Carrying on after you")
                 continue
+            if kind == "interstitial":
+                if self._sit_out_interstitial():
+                    continue
+                self.learn(playbooks.block(self.url(), portal.NEEDS_CAPTCHA))
+                self.say("The site's check didn't clear by itself, so it needs you", "rule", False)
+                if not self._wait_for_you(portal.NEEDS_CAPTCHA):
+                    raise Stop(portal.NEEDS_CAPTCHA, portal.handover_message(portal.NEEDS_CAPTCHA))
+                continue
             if kind == "closed":
                 raise Stop(CLOSED, "The advert says the role is closed, so there's nothing to apply to.")
             if kind == "success":
@@ -1379,6 +1491,8 @@ class Navigator:
                 continue
             if re.search(r"myworkdayjobs\.com|myworkday\.com|\.workday\.com", self.url(), re.I):
                 raise _Workday()
+            if self.seen[fp] >= 4 and self._rescue(snap, "The run keeps arriving back at this same page."):
+                continue
             if self.seen[fp] >= 4:
                 raise Stop(portal.UNKNOWN_FORM, "It kept arriving back at the same page, so it stopped "
                                                 "rather than loop. " + self._where())
@@ -1399,11 +1513,12 @@ class Navigator:
 
         def cleared() -> bool:
             try:
-                return page_kind(self.d.snapshot(self.page) or {}) not in ("captcha", "login")
+                return page_kind(self.d.snapshot(self.page) or {}) not in ("captcha", "login", "interstitial")
             except Exception:
                 return False
         try:
-            ok = portal._wait_for_person(self.key, self.d, self.page, state, cleared=cleared)
+            ok = portal._wait_for_person(self.key, self.d, self.page, state, cleared=cleared,
+                                          role=self.role)
         finally:
             self.waited += time.time() - t0
         if ok:
@@ -1428,6 +1543,8 @@ class Navigator:
     # --- from the advert to the form ----------------------------------------
     def _advert(self, snap: dict) -> None:
         from . import portal
+        if self.stuck >= 4 and self._rescue(snap, "None of the buttons tried so far led to the form."):
+            return
         if self.stuck >= 4:
             raise Stop(portal.UNKNOWN_FORM, "None of the buttons it tried led to the form. " + self._where())
         btns = [b for b in snap.get("buttons") or [] if not b.get("banner") and b["ref"] not in self.failed]
@@ -1464,6 +1581,8 @@ class Navigator:
         if "advert" not in self.scrolled:
             self.scrolled.add("advert")
             self.act({"do": "scroll"})
+            return
+        if self._rescue(snap, "No way from this advert to the application form has been found."):
             return
         raise Stop(portal.UNKNOWN_FORM, "It couldn't find a way from the advert to the form"
                    + ("" if self.brain is not None else " (and there's no engine to work it out)")
@@ -1564,8 +1683,7 @@ class Navigator:
             if not any(x.startswith(what) for x in self.left):
                 self.left.append(what + " (needs an answer)")
         if self.left:
-            raise Stop(portal.NEEDS_ANSWER, "Filled what it could and stopped: " + "; ".join(self.left[:6])
-                       + ". Finish these in the open browser.")
+            raise Stop(portal.NEEDS_ANSWER, self._needs_answers_message())
         self._forward(snap)
 
     def _forward(self, snap: dict) -> None:
@@ -1628,6 +1746,8 @@ class Navigator:
             self.scrolled.add("form")
             self.act({"do": "scroll"})
             return
+        if self._rescue(snap, "Everything fillable is filled but no button to go on has been found."):
+            return
         raise Stop(portal.UNKNOWN_FORM, "Filled in what's on this page, but it couldn't tell how to go on: "
                                         "there's no next or submit button it recognises"
                    + ("" if self.brain is not None else " (and no engine to work it out)")
@@ -1643,8 +1763,7 @@ class Navigator:
             if not any(x.startswith(what) for x in self.left):
                 self.left.append(what + " (needs an answer)")
         if self.left:
-            raise Stop(portal.NEEDS_ANSWER, "Filled what it could and stopped: " + "; ".join(self.left[:6])
-                       + ". Finish these in the open browser.")
+            raise Stop(portal.NEEDS_ANSWER, self._needs_answers_message())
         if not self.submit:
             raise Stop(portal.FILLED, "Filled in and left for you to read. Press "
                                       f"“{str(sub.get('text') or 'Submit')[:30]}” in the browser when "
@@ -1770,7 +1889,7 @@ class Navigator:
         """One engine turn: show the page, carry out the actions it chooses,
         refusing anything over the rails. True when the page moved on."""
         from . import jobscout
-        if not self.turns_left:
+        if not self.turns_left or self.engine_turns >= MAX_ENGINE_TURNS:
             return False
         self.turns_left -= 1
         self.engine_turns += 1
@@ -1781,6 +1900,7 @@ class Navigator:
                    "CANDIDATE_HAS": has,
                    "SITE_NOTES": playbooks.notes(self.url())[-4:],
                    "DONE_SO_FAR": [s["say"] for s in self.steps][-10:],
+                   "LAST_TURNS": self.engine_log[-8:],
                    "PROBLEM": problem,
                    "PAGE": compact(snap)}
         text = json.dumps(payload, ensure_ascii=False, default=str)
@@ -1802,10 +1922,36 @@ class Navigator:
             self.say("The engine had no suggestion", "engine", False)
             self.turns_left = min(self.turns_left, 1)
             return False
+        thought = str(reply.get("thinking") or "").strip() if isinstance(reply, dict) else ""
+        expect = str(reply.get("expect") or "").strip() if isinstance(reply, dict) else ""
+        if thought:
+            self.say("Thinking: " + thought[:220], "engine")
+        filled0 = len(self.filled)
+        moved = False
         for a in actions[:ACTIONS_PER_TURN]:
-            if isinstance(a, dict) and self._engine_action(a, snap):
-                return True                  # the page changed: the rest of its refs are stale
-        return False
+            if not isinstance(a, dict):
+                continue
+            n0 = len(self.steps)
+            try:
+                moved = self._engine_action(a, snap)
+            except Stop:
+                self.engine_log.append({"did": describe_action(a), "outcome": "ended the run"})
+                raise
+            said = [st["say"] for st in self.steps[n0:]]
+            outcome = "; ".join(said) or "nothing visible happened"
+            if moved:
+                outcome += " — the page changed"
+            self.engine_log.append({"did": describe_action(a), "outcome": outcome[:240]})
+            if moved:
+                break                        # the page changed: the rest of its refs are stale
+        if not moved and len(self.filled) == filled0:
+            errs = (self.look().get("errors") or [])[:4]
+            self.engine_log.append({"did": "(end of turn)", "outcome": (
+                "nothing changed" + (f" — expected: {expect[:120]}" if expect else "")
+                + (". The page now says: " + "; ".join(errs) if errs else ""))[:300]})
+        elif self.engine_turns < MAX_ENGINE_TURNS:
+            self.turns_left += 1             # a turn that got somewhere doesn't count against the budget
+        return moved
 
     def _engine_action(self, a: dict, snap: dict) -> bool:
         """One engine action, through the rails. True when the page changed."""

@@ -19,6 +19,58 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DEFAULT_PORT = 8766
+NEEDED = ("fastapi", "uvicorn", "httpx", "multipart", "pypdf", "docx", "bs4", "cryptography")
+
+
+def inside_a_zip(path: Path) -> bool:
+    """Opened straight from the zip: Windows ran it from a temporary copy,
+    which it deletes. Nothing set up there lasts."""
+    p = str(path).lower().replace("/", "\\")
+    return "\\appdata\\local\\temp\\" in p and ".zip" in p
+
+
+def _missing() -> list:
+    import importlib
+    gone = []
+    for name in NEEDED:
+        try:
+            importlib.import_module(name)
+        except ImportError as exc:
+            gone.append(getattr(exc, "name", None) or name)
+    return gone
+
+
+def _broken_dependencies() -> list:
+    """`pip check` names a package another one needs that isn't there
+    (fastapi without annotated-doc, after an install that was cut short)."""
+    import re as _re
+    import subprocess
+    try:
+        out = subprocess.run([sys.executable, "-m", "pip", "check"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=120).stdout
+    except Exception:
+        return []
+    return sorted(set(_re.findall(r"requires ([A-Za-z0-9_.\-]+), which is not installed", out)))
+
+
+def repair() -> bool:
+    """Put back missing packages, once, and say so. True when it worked."""
+    import subprocess
+    print("\n  Some of its packages are missing or incomplete. Putting them back")
+    print("  (a minute or two; this only happens once)...\n", flush=True)
+    cmds = [[sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt"), "--quiet"]]
+    extra = _broken_dependencies()
+    if extra:
+        cmds.append([sys.executable, "-m", "pip", "install", *extra, "--quiet"])
+    for cmd in cmds:
+        if subprocess.run(cmd, cwd=ROOT).returncode != 0:
+            return False
+    extra = _broken_dependencies()
+    if extra:
+        subprocess.run([sys.executable, "-m", "pip", "install", *extra, "--quiet"], cwd=ROOT)
+    import importlib
+    importlib.invalidate_caches()
+    return not _missing() and not _broken_dependencies()
 
 
 def _free_port(start: int, tries: int = 12) -> int:
@@ -35,11 +87,21 @@ def main() -> int:
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
-    try:
-        import uvicorn
-    except ImportError:
-        print("uvicorn isn't installed. Run install.bat (or ./install.sh).")
-        return 1
+    if inside_a_zip(ROOT):
+        print("\n  Agent Jo Jobs is running from inside the zip file, so Windows is using")
+        print("  a temporary copy that it deletes later. Nothing set up there will last.")
+        print("\n  To fix it:")
+        print("    1. Close this window.")
+        print("    2. Right-click the zip, choose Extract All, and pick a folder such as Documents.")
+        print("    3. In the extracted folder, double-click install.bat.\n")
+        return 3
+    if _missing() or _broken_dependencies():
+        if not repair():
+            print("\n  It couldn't put its packages back by itself. Run install.bat again;")
+            print("  if that fails too, send the last lines of install.log.\n")
+            return 1
+        print("  Packages repaired.\n")
+    import uvicorn
 
     # its own data now: on the first start, copy the job search's data across
     # from Agent Jo's folder, where it used to live (agent/migrate.py)

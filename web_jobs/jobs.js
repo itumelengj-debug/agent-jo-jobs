@@ -611,13 +611,16 @@ function followPortal(r, key) {
       return;
     }
     if (s.state === "running") {
+      clearNeedsYou();
       showPortalRunning(s, r);
       return;
     }
     if (s.state) {
       clearInterval(S._portalTimer);
       S._portalTimer = null;
+      clearNeedsYou();
       showPortal(s, r);
+      if (s.state === "needs_answer") toast("Your answers are needed to finish this application.", "warn");
       refresh().then(drawRoleList);
     }
   };
@@ -640,17 +643,27 @@ function showPortalRunning(s, r) {
 }
 
 function showPortalWaiting(s, r) {
-  const box = portalBox(s.blocked_by === "needs_captcha"
-    ? "It needs you — there's a captcha"
-    : "It needs you — this one wants you signed in");
+  const ask = s.ask || {};
+  const box = portalBox(ask.headline || (s.blocked_by === "needs_captcha"
+    ? "Your help is needed: there's a captcha"
+    : "Your help is needed: this site wants you signed in"));
   box.classList.add("portal-waiting");
-  box.appendChild(el("p", "", s.message
-    || "Handle it in the open browser window; it will carry on by itself."));
-  box.appendChild(el("p", "muted",
-    "It watches the page and continues the moment it clears. Press Continue "
-    + "if it can't tell, or Stop to leave it."));
+  box.setAttribute("role", "alert");
+  if (ask.steps && ask.steps.length) {
+    box.appendChild(el("h5", "portal-h", "What to do"));
+    const ol = el("ol", "ask-steps");
+    ask.steps.forEach((t) => ol.appendChild(el("li", "", t)));
+    box.appendChild(ol);
+  } else {
+    box.appendChild(el("p", "", s.message
+      || "Handle it in the open browser window; it will carry on by itself."));
+  }
+  if (/^Still waiting/.test(s.message || "")) box.appendChild(el("p", "warn-text", s.message.split(". ")[0] + "."));
+  box.appendChild(el("p", "muted", (ask.then || "It continues the moment the page clears.")
+    + " Press “I've handled it” if it doesn't notice, or Stop to leave this one."));
+  if (ask.why) box.appendChild(el("p", "muted small", "Why it can't do this itself: " + ask.why));
   const bar = el("div", "actions");
-  const go = el("button", "btn primary sm", "I've handled it — continue");
+  const go = el("button", "btn primary sm", "I've handled it, continue");
   go.addEventListener("click", () => busy(go, "Carrying on…", async () => {
     await api("/api/jobs/portal/continue", { key: r.key });
   }));
@@ -659,17 +672,39 @@ function showPortalWaiting(s, r) {
     await api("/api/jobs/portal/cancel", { key: r.key });
   }));
   bar.append(go, stop);
+  if (window.Notification && Notification.permission === "default") {
+    const ping = el("button", "btn sm ghost", "Alert me on this computer next time");
+    ping.addEventListener("click", () => Notification.requestPermission().then(() => ping.remove()));
+    bar.appendChild(ping);
+  }
   box.appendChild(bar);
   const d = $("#roleDetail");
   const was = d.querySelector(".portal-out");
   if (was) was.replaceWith(box); else d.appendChild(box);
-  // a quiet nudge, because the browser window may be behind this one
-  if (!S._portalNudged) {
-    S._portalNudged = true;
-    toast(s.blocked_by === "needs_captcha"
-      ? "A captcha needs you — the browser window is open."
-      : "A sign-in needs you — the browser window is open.", "warn");
-  }
+  needsYouAlert(r.key, ask.headline || "Agent Jo Jobs needs you",
+                (ask.steps || [])[1] || s.message || "");
+}
+
+/* Make sure a request for help is noticed: a toast, the tab title, and a
+   system notification when you allowed them. Once per wait, not per refresh. */
+function needsYouAlert(key, title, body) {
+  const id = key + "|" + title;
+  if (S._askedFor === id) return;
+  S._askedFor = id;
+  toast(title + ". The browser window is open.", "warn");
+  if (!S._titleWas) S._titleWas = document.title;
+  document.title = "(!) Needs you · " + S._titleWas;
+  try {
+    if (window.Notification && Notification.permission === "granted" && document.hidden !== false) {
+      const n = new Notification(title, { body: body, tag: "agent-jo-jobs-needs-you" });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+  } catch (e) { /* notifications are a nicety */ }
+}
+
+function clearNeedsYou() {
+  S._askedFor = "";
+  if (S._titleWas) { document.title = S._titleWas; S._titleWas = ""; }
 }
 
 // Who did each step of an application: a rule every site shares, something

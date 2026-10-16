@@ -174,7 +174,11 @@ def state() -> dict:
     waiting.sort(key=lambda x: (x["approved"], x["held"], -(x["fit"] or 0)))
     runs = jobscout.run_reports(1)
     last = runs[0] if runs else None
-    return {"questions": [{"question": q["question"], "roles": len(q.get("roles") or [])}
+    from . import portal
+    needs_you = [{x: a.get(x) for x in ("headline", "steps", "then", "until")}
+                 for a in portal.waiting_asks()]
+    return {"needs_you": needs_you,
+            "questions": [{"question": q["question"], "roles": len(q.get("roles") or [])}
                           for q in answerbank.open_questions()[:20]],
             "drafts": waiting[:25],
             "interviews": interviews.upcoming(jobscout.roles())[:6],

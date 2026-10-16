@@ -740,3 +740,124 @@ of that log and waits. It also says so if it's run from inside the zip
 rather than an extracted folder. `start.bat` now stays open, with the error,
 if the app stops. And `setup_jobs.py` reads each command's output as UTF-8,
 so a character the Windows codepage can't decode no longer stops setup.
+
+
+### 26. Six checks that failed in the full suite
+
+Reported from the GitHub upload: the full suite had 6 failures in the zip.
+They're in the part that needs FastAPI, which the build machine couldn't run,
+and all were in the checks, not the app:
+
+- `tests/jobsapp_views.js` gave the window a `document` with no
+  `documentElement` or `body`; the window has used both since the Symbolic
+  Synapse look, so four `ui.*` checks crashed. The stand-in now has them, and
+  `getElementById`, `createTextNode`, and a `window` with `location` and
+  `matchMedia`.
+- `every_module_it_imports_is_in_it` read `from agent import backup as
+  _backup` as a module called "backup as _backup". It now drops the alias.
+- `every_user_facing_endpoint_has_a_ui` (in both suites) couldn't read a call
+  with a query string (`/api/jobs/mock?key=`) or a dot (`interview.ics`), so
+  four routes the window does call were reported missing. `resume/file` is
+  reached through a link the server hands back, and is listed with
+  `alerts/ingest` as having no button of its own.
+- `auto.with_everything_set_it_reports_ready` was hidden behind the import
+  check. Its setup predated two gates, sending switched on (entry 19) and the
+  contact details and CV company forms need; readiness was right to say not
+  ready. The setup now has both.
+
+
+### 27. Updates from a folder on a Windows PC
+
+Found when the full suite ran on Windows: `update.someone_elses_signature_is_refused`
+failed with "updates are only fetched over https". The updater found the
+release zip beside `latest.json` with `urljoin`, which only understands web
+addresses: given `C:\releases\latest.json` it returned the bare `r.zip`, and
+the download was then refused. An update from a folder on a Windows PC could
+never install; on Linux and macOS the same check passed, which is how it got
+through. It now finds the zip beside `latest.json` wherever that is: a web
+address, a Windows folder, a network share (`\\server\share`, refused
+outright before), or a `file:///C:/...` address (which kept a stray slash in
+front of the drive letter). A check covers each.
+
+
+### 28. The full suite runs to the end
+
+Found when the full suite ran past the updater: `python tests/test_logic.py`
+stopped with "name '_interview_prep_checks' is not defined". The
+`if __name__ == "__main__":` block that runs the suite sat in the middle of
+the file, so `main()` ran before the check groups written after it existed.
+It's the last thing in the file now, and a check makes sure it stays there.
+
+### 29. It looks before it leaps, and gets stuck less
+
+- **It checks what its actions did.** Every engine step on an unfamiliar site
+  is now recorded with what really happened ("pressed Next: the form said
+  'Phone is required'", "nothing changed"), and the engine reads that before
+  its next move. It's told to work out *why* something failed and choose a
+  different route, instead of pressing the next likely button.
+- **It thinks out loud.** Each engine turn says what the page is, what's in
+  the way, its plan, and what it expects to see afterwards. The plan shows in
+  the application's step list ("Thinking: …"), so you can see why it did what
+  it did. It's told not to press a button it isn't sure about.
+- **A careful second look before giving up.** A page it keeps returning to,
+  an advert with no way to the form, or a form page with no button to go on
+  now gets one rescue turn, with everything already tried in front of it,
+  before the run stops.
+- **Turns that get somewhere are free.** The engine budget (12 turns) is only
+  spent by turns that achieve nothing; productive turns are refunded, up to
+  30 in all, so long multi-page forms no longer run out half-way.
+- **"Checking your browser" screens are waited out.** A holding page in front
+  of a site (a bot check, a redirect, a loader) is given up to 25 seconds to
+  clear by itself. Nothing is worked around: if it turns into a challenge,
+  it's a captcha and it's handed to you, as before.
+- **Pages read too early are read again.** A page whose script hadn't drawn
+  it yet looked empty and was taken for a dead end; it now waits and rereads.
+- Checks: 9 new `navigator.*` (740 runnable pass); the real-browser
+  navigator check passes 23 of 23.
+
+### 30. When it needs you, it says so plainly
+
+- **One clear ask.** A captcha, a site's browser check or a sign-in now
+  produces one message naming the job and the site ("Your help is needed for
+  Data Engineer at Acme: jobs.acme.example wants you signed in"), numbered
+  steps for exactly what to do, what happens next, how long it waits, and why
+  it can't do it itself. The window, the phone and the log all use the same
+  wording. The old captcha message told you to "run it again" while the app
+  was actually waiting for you; that contradiction is gone.
+- **You'll notice it.** The tab title changes to "(!) Needs you", a toast
+  appears, and, if you allow it once ("Alert me on this computer next
+  time"), a system notification pops up even when the window is behind
+  others. Half-way through the wait it reminds you with the minutes left.
+- **On your phone too.** A new "Needs you at the computer" section on the
+  phone companion lists each application waiting for you, with the steps.
+- **Unanswered questions, listed.** When a form stops on questions only you
+  can answer, it lists each one on its own line, for which job, and gives
+  both ways out: answer them in the open browser, or once under Answers →
+  Waiting on you so every later form is filled for you.
+- **When it gives up waiting,** it says which application stopped and that
+  nothing was submitted.
+- Checks: 5 new `asks.*` (745 runnable pass); the real-browser navigator
+  and layout checks pass.
+
+### 31. "No module named 'annotated_doc'", and running from inside the zip
+
+- **It repairs its own packages.** An install that was cut short left FastAPI
+  without a package it needs (annotated-doc), and the app stopped at start.
+  It now checks its packages before it starts; if any are missing or
+  incomplete it puts them back by itself, says so, and carries on. Setup
+  also runs `pip check` and adds anything a package needs that isn't there.
+- **Opening it from inside the zip is caught.** Double-clicking install.bat
+  or start.bat inside an unopened zip makes Windows run a temporary copy in
+  `AppData\Local\Temp` that it deletes later, so setup never lasts. Both
+  scripts and the app now say so and give the three steps: close, Extract
+  All to a folder such as Documents, run install.bat there.
+- Checks: 3 new `windows.*` (748 runnable pass).
+
+### 32. No more 200-role limit
+
+- Every role it finds is now kept. Saving new roles used to trim the list to
+  the newest 200, which quietly deleted older roles, including ones you had
+  applied to and their replies. Roles you've already lost to the trim can't
+  be brought back by the app, but nothing is dropped from now on.
+- Check: `roles.no_cap_on_how_many_are_kept` (749 runnable pass); 360 roles
+  added in three batches are all kept.

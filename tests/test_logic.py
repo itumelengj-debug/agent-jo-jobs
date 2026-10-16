@@ -2287,8 +2287,9 @@ def main() -> None:
     # import statements only: a comment naming agent.main isn't an import
     _egmods = (set(_re.findall(r"^\s*import agent\.(\w+)", _egsrc, _re.M))
                | set(_re.findall(r"^\s*from agent\.(\w+) import", _egsrc, _re.M))
-               | {m.strip() for g in _re.findall(r"^\s*from agent import ([\w, ]+)",
-                                                 _egsrc, _re.M)
+               # "from agent import backup as _backup" names agent/backup.py
+               | {m.strip().split(" as ")[0].strip()
+                  for g in _re.findall(r"^\s*from agent import ([\w, ]+)", _egsrc, _re.M)
                   for m in g.split(",")})
     _egmiss = sorted(m for m in _egmods if not _RPath(f"agent/{m}.py").exists())
     check("jobsapp.every_module_it_imports_is_in_it",
@@ -2339,6 +2340,15 @@ def main() -> None:
             # and with rehearsal off it really sends
             _aaj.set_stage(_aak, "found")
             _aaj.save_auto_config({**_aaj.auto_config(), "dry_run": False})
+            # everything a live run needs, as a real setup has it: sending
+            # switched on (CHANGELOG 19), and the contact details and CV that
+            # company forms ask for every time
+            _aao.save_config({**_aao.load_config(), "enabled": True})
+            _aaj.save_profile({**_aaj.profile(), "email": "a@example.com",
+                               "phone": "+27 82 000 0000", "location": "Johannesburg"})
+            import agent.cvstore as _aacv
+            _aacv.save("Experience\nBI analyst at Acme, building SQL Server reports "
+                       "and data models for finance and operations teams. " * 3)
             _aar = _aaj.auto_readiness()
             check("auto.with_everything_set_it_reports_ready",
                   _aar["ok"] and _aar["will_send"] == 1)
@@ -2517,7 +2527,10 @@ def main() -> None:
     # internal alerts/ingest, which the folder reader calls, has no door.
     _jaall = set(_re.findall(r'@app\.(?:get|post|delete)\("(/api/jobs[^"]*)"',
                              _RPath("jobs/server.py").read_text("utf-8")))
-    _jaused = set(_re.findall(r'"(/api/jobs[a-z0-9/_-]*)"', _jbjs))
+    # read a call with its query string ("/api/jobs/mock?key=") and a dotted
+    # name (interview.ics) too: those were reported missing though the
+    # window calls them
+    _jaused = set(_re.findall(r'["`](/api/jobs[a-z0-9/_.\-]*)(?:\?[^"`]*)?["`]', _jbjs))
     # a route with a path parameter is called as a template literal, so match
     # it by its fixed prefix rather than the literal "{key}"
     _jamiss = set()
@@ -2529,7 +2542,8 @@ def main() -> None:
             continue
         _jamiss.add(_jar)
     check("jobsapp.every_user_facing_endpoint_has_a_ui",
-          _jamiss <= {"/api/jobs/alerts/ingest"}, f"{sorted(_jamiss)}")
+          _jamiss <= {"/api/jobs/alerts/ingest", "/api/jobs/resume/file"},  # resume/file: a link the server hands back
+          f"{sorted(_jamiss)}")
     # a GET with a body is rejected by the browser before it's sent — the
     # first version did this on every read, so they all failed silently
     check("jobsapp.reads_never_carry_a_body",
@@ -3965,6 +3979,18 @@ def _digest_checks() -> None:
 #   python -c "import tests.test_logic as t; t._updater_checks()"
 # ---------------------------------------------------------------------- #
 def _updater_checks() -> None:
+    import agent.updater as _UU
+    # where the zip is, from latest.json's address: a Windows folder and a
+    # network share as well as the web (urljoin gave the bare "r.zip" for a
+    # Windows path, and the download was refused as "not https")
+    check("update.a_release_beside_latest_json_is_found_wherever_it_is",
+          _UU.release_url(r"C:\rel\latest.json", "r.zip") == r"C:\rel\r.zip"
+          and _UU.release_url(r"\\nas\rel\latest.json", "r.zip") == r"\\nas\rel\r.zip"
+          and _UU.release_url("/srv/rel/latest.json", "r.zip") == "/srv/rel/r.zip"
+          and _UU.release_url("https://x.test/d/latest.json", "r.zip") == "https://x.test/d/r.zip"
+          and _UU.release_url(r"C:\rel\latest.json", "https://cdn.test/r.zip") == "https://cdn.test/r.zip"
+          and _UU._local(r"C:\rel\r.zip") and _UU._local(r"\\nas\rel\r.zip")
+          and not _UU._local("https://x.test/r.zip"))
     import hashlib as _uh
     import importlib.util as _uil
     import io as _uio
@@ -4085,14 +4111,6 @@ def _updater_checks() -> None:
                           for f in ("tools/make_release.py",)))
     finally:
         U.ROOT, U.config.BUILD_ID, U.config.AGENT_HOME = saved
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except AssertionError as exc:
-        print(f"\nFAILED after {len(PASS)} passing checks: {exc}")
-        sys.exit(1)
 
 
 # The pasted CV feeds tailoring and interview prep, and an interview
@@ -5245,6 +5263,11 @@ def _navigator_policy(pl: dict) -> dict:
         {"tool": "note", "text": "Acme's form is two pages behind 'Start my journey'."}]}
 
 
+def page_kind_is(nv, kind):
+    import agent.navigator as N
+    return N.page_kind(nv.snap) == kind
+
+
 def _navigator_checks() -> None:
     import tempfile as _nt
     from agent import config as _nc
@@ -5334,6 +5357,88 @@ def _navigator_checks() -> None:
           N.apply_email({"text": "To apply, send your CV to jobs@acme.co.za by Friday."}) == "jobs@acme.co.za"
           and N.apply_email({"text": "Questions about privacy? privacy@acme.co.za"}) == ""
           and N.apply_email({"text": "Contact us on info@acme.co.za"}) == "")
+
+    # --- careful engine turns: it sees what its last actions really did ----- #
+    class _Drv:
+        def __init__(self, snaps):
+            self.snaps, self.reads, self.acts = list(snaps), 0, []
+        def snapshot(self, page):
+            self.reads += 1
+            return dict(self.snaps.pop(0) if len(self.snaps) > 1 else self.snaps[0])
+        def act(self, page, action):
+            self.acts.append(action)
+            return {"ok": True}
+    advert = {"url": "https://x.example/job", "title": "Job", "text": "A role at X. " * 20,
+              "buttons": [{"ref": "0:1", "text": "Tell me more"}], "controls": []}
+    seen_payloads = []
+    def _bogus(payload):
+        seen_payloads.append(payload)
+        return {"thinking": "The advert hides the form", "expect": "a form", "actions": [{"tool": "click", "ref": "9:9"}]}
+    nv = N.Navigator(_Drv([advert]), object(), {"title": "T"}, {}, {"url": advert["url"]},
+                     brain=FakeBrain(_bogus), turns=3)
+    nv.look(); nv._engine(nv.snap, "find the form"); nv._engine(nv.snap, "find the form")
+    last = seen_payloads[-1].get("LAST_TURNS") or []
+    check("navigator.engine_sees_what_its_last_actions_did",
+          any("9:9" in t["did"] and "isn't on the page" in t["outcome"] for t in last)
+          and any("nothing changed" in t["outcome"] and "expected: a form" in t["outcome"] for t in last), last)
+    check("navigator.engine_says_its_reasoning_in_the_steps",
+          any(st["say"].startswith("Thinking: The advert hides") for st in nv.steps))
+    check("navigator.a_wasted_turn_costs_a_turn", nv.turns_left == 1)
+    def _moves(payload):
+        return {"thinking": "press it", "actions": [{"tool": "click", "ref": "0:1"}]}
+    nv2 = N.Navigator(_Drv([advert, {**advert, "url": "https://x.example/apply", "text": "Form"}]), object(),
+                      {"title": "T"}, {}, {"url": advert["url"]}, brain=FakeBrain(_moves), turns=3)
+    nv2.look(); nv2._engine(nv2.snap, "find the form")
+    check("navigator.a_turn_that_got_somewhere_is_refunded", nv2.turns_left == 3 and nv2.pending)
+    nv3 = N.Navigator(_Drv([advert]), object(), {"title": "T"}, {}, {"url": advert["url"]},
+                      brain=FakeBrain(_bogus), turns=0)
+    nv3.look()
+    r1 = nv3._rescue(nv3.snap, "stuck"); r2 = nv3._rescue(nv3.snap, "stuck")
+    check("navigator.a_stuck_page_gets_one_careful_second_look",
+          nv3.engine_turns == 1 and r1 is False and r2 is False
+          and "RESCUE" in seen_payloads[-1]["PROBLEM"])
+    check("navigator.no_engine_means_no_rescue",
+          N.Navigator(_Drv([advert]), object(), {}, {}, {}, brain=None)._rescue(advert, "x") is False)
+    hold = {"url": "https://x.example/job", "title": "Just a moment...",
+            "text": "Checking if the site connection is secure", "buttons": [], "controls": []}
+    check("navigator.a_browser_check_screen_is_waited_out_not_worked_around",
+          N.page_kind(hold) == "interstitial" and N.page_kind(advert) == "advert"
+          and N.page_kind({**hold, "captcha": True}) == "captcha")
+    d4 = _Drv([hold, hold, advert])
+    nv4 = N.Navigator(d4, object(), {}, {}, {"url": hold["url"]})
+    nv4.look()
+    check("navigator.it_waits_for_a_check_that_clears_itself",
+          nv4._sit_out_interstitial() and page_kind_is(nv4, "advert"))
+    d5 = _Drv([{"url": "https://x.example/job", "text": "", "buttons": [], "controls": []}, advert])
+    nv5 = N.Navigator(d5, object(), {}, {}, {})
+    check("navigator.a_page_read_before_it_was_drawn_is_read_again",
+          nv5.look().get("buttons") and d5.reads == 2)
+
+    # --- when it needs you, it says so plainly ------------------------------ #
+    ask = P.ask_for(P.NEEDS_CAPTCHA, {"title": "Data Engineer", "company": "Acme"},
+                    "https://www.jobs.acme.example/apply/9", minutes=15)
+    check("asks.name_the_job_the_site_and_the_steps",
+          "Data Engineer at Acme" in ask["headline"] and "jobs.acme.example" in ask["headline"]
+          and len(ask["steps"]) >= 2 and "15 minutes" in ask["then"] and "nothing is submitted" in ask["then"])
+    lg = P.ask_for(P.NEEDS_LOGIN, {}, "https://portal.example/x")
+    check("asks.a_sign_in_says_it_is_never_done_for_you",
+          "signed in" in lg["headline"] and "never signs in" in lg["why"] and "Sign in to portal.example" in lg["steps"][1])
+    check("asks.one_wording_everywhere", P.ask_text(ask).startswith(ask["headline"]) and "1. " in P.ask_text(ask))
+    nva = N.Navigator(_Drv([advert]), object(), {"title": "Analyst", "company": "Beta"}, {}, {})
+    nva.left = ["Notice period (needs an answer)", "Current CTC (needs an answer)"]
+    m = nva._needs_answers_message()
+    check("asks.unanswered_questions_are_listed_with_both_ways_out",
+          "for Analyst at Beta" in m and "• Notice period" in m and "• Current CTC" in m
+          and "Waiting on you" in m and "Nothing was submitted" in m and "(needs an answer)" not in m)
+    P._set_session("ask-test", state=P.WAITING, ask=ask, message=P.ask_text(ask))
+    try:
+        import agent.phone as _ph
+        w = [a for a in P.waiting_asks() if a["key"] == "ask-test"]
+        check("asks.the_phone_sees_what_is_waiting_for_you",
+              w and w[0]["headline"] == ask["headline"]
+              and any(x.get("headline") == ask["headline"] for x in _ph.state().get("needs_you", [])))
+    finally:
+        P._sessions.pop("ask-test", None)
 
     # --- a whole application, twice, against a site in memory ---------------- #
     home, db = _nc.AGENT_HOME, _nc.DB_PATH
@@ -5887,5 +5992,33 @@ def _windows_scripts_checks() -> None:
     check("windows.install_never_closes_on_a_failure",
           ":setup_failed" in inst and "Get-Content -Path '.\\install.log' -Tail 30" in inst
           and inst.count("pause") >= 4 and ":not_unzipped" in inst)
+    import ast as _wast
+    _wt = _wast.parse((root / "tests" / "test_logic.py").read_text("utf-8"))
+    check("suite.main_runs_only_after_every_check_is_defined",
+          isinstance(_wt.body[-1], _wast.If) and "__main__" in _wast.unparse(_wt.body[-1].test))
     st = (root / "start.bat").read_text("utf-8")
+    import agent.jobscout as _cap
+    check("roles.no_cap_on_how_many_are_kept",
+          "rs[-200:]" not in (root / "agent" / "jobscout.py").read_text("utf-8")
+          and "save_roles(rs)" in (root / "agent" / "jobscout.py").read_text("utf-8"))
     check("windows.start_stays_open_if_the_app_fails", ":crashed" in st and "pause" in st.split(":crashed")[1])
+    sys.path.insert(0, str(root))
+    import run_jobs as _rj
+    import setup_jobs as _sj
+    check("windows.running_from_inside_the_zip_is_caught",
+          _rj.inside_a_zip(Path(r"C:\Users\a\AppData\Local\Temp\41_agent-jo-jobs (38).zip.537\agent-jo-jobs"))
+          and not _rj.inside_a_zip(Path(r"C:\Users\a\Documents\agent-jo-jobs")))
+    check("windows.both_scripts_refuse_to_run_inside_the_zip",
+          all("goto in_zip" in b and ":in_zip" in b for b in (inst, st)))
+    import re as _wre
+    _rx = _wre.search(r"re.findall\(r'(.*?)',o\)", _sj.FILL_GAPS).group(1)
+    check("windows.setup_fills_in_a_package_another_needs",
+          _wre.findall(_rx, "fastapi 0.121.0 requires annotated-doc, which is not installed.") == ["annotated-doc"]
+          and "Checking nothing it needs is missing" in [w for w, _c, _n in _sj.steps()])
+
+if __name__ == "__main__":
+    try:
+        main()
+    except AssertionError as exc:
+        print(f"\nFAILED after {len(PASS)} passing checks: {exc}")
+        sys.exit(1)

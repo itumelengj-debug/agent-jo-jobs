@@ -458,6 +458,50 @@ def page_state(html: str, url: str = "") -> str:
     return ""
 
 
+def _host(url: str) -> str:
+    m = re.match(r"https?://(?:www\.)?([^/:?#]+)", str(url or ""))
+    return m.group(1) if m else ""
+
+
+def ask_for(state: str, role: dict | None = None, url: str = "", detail: str = "",
+            minutes: int = 15) -> dict:
+    """What the person is asked to do, said plainly: which application, what
+    is wrong, exactly what to do, and what happens after. The window, the
+    phone and the run log all show this one wording."""
+    role = role or {}
+    job = " at ".join(x for x in (str(role.get("title") or "").strip(),
+                                   str(role.get("company") or "").strip()) if x)
+    site = _host(url) or "the site"
+    for_job = f" for {job}" if job else ""
+    then = (f"It notices by itself when that's done and carries on with the application. "
+            f"It waits {minutes} minutes; after that it stops, and nothing is submitted.")
+    if state == NEEDS_CAPTCHA:
+        head = f"Your help is needed{for_job}: {site} wants a human check (a CAPTCHA)"
+        steps = ["Find the Agent Jo Jobs browser window (it may be behind this one).",
+                 "Solve the check on the page that's open there.",
+                 "Leave the window open; don't fill in the form yourself."]
+        why = "Captchas are there to stop automation, so solving them is always yours."
+    elif state == NEEDS_LOGIN:
+        head = f"Your help is needed{for_job}: {site} wants you signed in"
+        steps = ["Find the Agent Jo Jobs browser window (it may be behind this one).",
+                 f"Sign in to {site}, or create the account if you're happy to.",
+                 "Leave the window open after signing in."]
+        why = ("It never signs in or creates accounts for you. Your sign-in is kept, so "
+               f"{site} won't need you again.")
+    else:
+        head = f"Your help is needed{for_job}"
+        steps = [detail or "Look at the open browser window."]
+        why = ""
+    return {"state": state, "headline": head, "steps": steps, "then": then, "why": why,
+            "job": job, "site": site, "url": str(url or "")[:300], "minutes": minutes}
+
+
+def ask_text(ask: dict) -> str:
+    """The same ask as one message, for places that show only text."""
+    steps = " ".join(f"{i}. {t}" for i, t in enumerate(ask.get("steps") or [], 1))
+    return " ".join(x for x in (ask.get("headline", "") + ".", steps, ask.get("then", "")) if x.strip())
+
+
 def handover_message(state: str, detail: str = "") -> str:
     if state == NEEDS_LOGIN:
         return ("This one needs you signed in. The browser is open on the "
@@ -1277,6 +1321,16 @@ def _set_session(key: str, **fields) -> None:
         s["at"] = _iso()
 
 
+def waiting_asks() -> list:
+    """Every application waiting for the person right now, with its ask."""
+    with _sessions_lock:
+        items = [(k, dict(v)) for k, v in _sessions.items() if v.get("state") == WAITING]
+    return [{"key": k, "message": v.get("message", ""), "since": v.get("waiting_since", ""),
+             "until": v.get("wait_until", ""),
+             **{x: (v.get("ask") or {}).get(x) for x in ("headline", "steps", "then", "job", "site")}}
+            for k, v in items]
+
+
 def session_continue(key: str) -> dict:
     """The person says they've handled it. Checked by the waiting loop."""
     _set_session(key, resume=True)
@@ -1288,8 +1342,14 @@ def session_cancel(key: str) -> dict:
     return session(key)
 
 
+def _iso_in(seconds: float) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _wait_for_person(key: str, driver, page, state: str,
-                     timeout_s: float = 900.0, cleared=None) -> bool:
+                     timeout_s: float = 900.0, cleared=None, role: dict | None = None,
+                     detail: str = "") -> bool:
     """Stop, ask for help, and carry on once it's handled.
 
     A sign-in page or a captcha used to end the attempt: it reported what it
@@ -1298,13 +1358,26 @@ def _wait_for_person(key: str, driver, page, state: str,
     the application continues from where it stopped. It notices by itself when
     the page clears, and there's a Continue button for when it can't tell.
     """
-    _set_session(key, state=WAITING, blocked_by=state,
-                 message=handover_message(state),
+    minutes = max(1, int(round(timeout_s / 60)))
+    try:
+        url = str(getattr(page, "url", "") or "")
+    except Exception:
+        url = ""
+    ask = ask_for(state, role, url, detail, minutes)
+    _set_session(key, state=WAITING, blocked_by=state, ask=ask,
+                 message=ask_text(ask),
                  screenshot=driver.shot(page, "waiting"),
-                 waiting_since=_iso(), resume=False, cancel=False)
-    deadline = time.time() + timeout_s
+                 waiting_since=_iso(), wait_until=_iso_in(timeout_s), resume=False, cancel=False)
+    start = time.time()
+    deadline = start + timeout_s
+    nudged = False
     while time.time() < deadline:
         s = session(key)
+        if not nudged and time.time() - start > timeout_s / 2:
+            nudged = True                      # say it again, with the time that's left
+            left = max(1, int(round((deadline - time.time()) / 60)))
+            _set_session(key, message=f"Still waiting for you, about {left} minute"
+                                      f"{'' if left == 1 else 's'} left. " + ask_text(ask))
         if s.get("cancel"):
             return False
         try:
@@ -1318,8 +1391,10 @@ def _wait_for_person(key: str, driver, page, state: str,
         if s.get("resume"):
             return True                        # they say it's handled
         time.sleep(2)
-    _set_session(key, message="Nobody came back within 15 minutes, so it "
-                              "stopped. Nothing was submitted.")
+    _set_session(key, message=f"No one came back within {minutes} minutes, so it stopped"
+                              + (f" the application for {ask['job']}" if ask.get("job") else "")
+                              + ". Nothing was submitted. Run it again when you're at the "
+                                "computer.")
     return False
 
 

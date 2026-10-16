@@ -1109,6 +1109,13 @@ body { font-size: 13px; }
 .copy-fallback { position: fixed; left: -9999px; top: 0; }
 
 /* it is waiting for you — this must be hard to miss */
+/* a request for help: numbered steps, kept on their own lines */
+.portal-out p { white-space: pre-line; }
+.ask-steps { margin: 6px 0 10px 20px; padding: 0; line-height: 1.5; }
+.ask-steps li { margin: 2px 0; }
+.portal-waiting .warn-text { color: var(--warn); font-weight: 600; }
+.portal-waiting .small { font-size: 0.85em; }
+
 .portal-waiting {
   border-color: rgba(243, 196, 109, .45) !important;
   background: linear-gradient(180deg, rgba(243, 196, 109, .10), transparent 60%),

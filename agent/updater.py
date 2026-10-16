@@ -33,6 +33,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import urljoin
 
 from . import config
@@ -73,10 +74,36 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
 
 
+def _local(url: str) -> bool:
+    """A file on this PC or your network: file://, C:\\..., /..., \\\\server\\share."""
+    u = str(url or "")
+    return (u.startswith(("file://", "/", "\\\\")) or (len(u) > 2 and u[1] == ":"))
+
+
+def release_url(src: str, url: str) -> str:
+    """Where the release zip is, from latest.json's address and its "url".
+
+    urljoin only understands web addresses: given a Windows path
+    ("C:\\releases\\latest.json") it returned the bare "r.zip", which was then
+    refused as "not https", so an update from a folder on a Windows PC or a
+    network share could never install."""
+    url, src = str(url or "").strip(), str(src or "").strip()
+    if url.startswith(("https://", "http://", "file://")) or _local(url):
+        return url                                    # already a full address
+    if src.startswith(("https://", "http://", "file://")):
+        return urljoin(src, url)
+    if (len(src) > 2 and src[1] == ":") or src.startswith("\\\\"):
+        return str(PureWindowsPath(src).parent / url)
+    return str(PurePosixPath(src).parent / url)
+
+
 def _get(url: str, *, limit: int = MAX_BYTES) -> bytes:
     """Fetch a URL (https, or file:// for a folder on your network)."""
-    if url.startswith("file://") or (len(url) > 2 and url[1] == ":") or url.startswith("/"):
-        p = Path(url[7:] if url.startswith("file://") else url)
+    if _local(url):
+        path = url[7:] if url.startswith("file://") else url
+        if len(path) > 3 and path[0] == "/" and path[2] == ":":
+            path = path[1:]                    # file:///C:/x -> C:/x, not /C:/x
+        p = Path(path)
         data = p.read_bytes()
     else:
         if not url.startswith("https://"):
@@ -126,7 +153,7 @@ def check() -> dict:
     newer = str(info["build"]) > str(config.BUILD_ID)
     return {"ok": True, "current": config.BUILD_ID, "latest": info["build"],
             "newer": newer, "notes": str(info.get("notes", ""))[:2000],
-            "size": info.get("size"), "url": urljoin(src, info["url"]),
+            "size": info.get("size"), "url": release_url(src, info["url"]),
             "sha256": info["sha256"]}
 
 
