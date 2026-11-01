@@ -737,11 +737,18 @@ AUTO_DEFAULTS = {
     # "prepare" fills the form and answers what it can, and leaves it to you;
     # "submit" finishes it too; "off" ignores portal-only roles.
     "portal_mode": "prepare",
-    "daily_cap": 5,         # applications are not a numbers game; a cap also
-                            # bounds the blast radius of any mistake
-    # each prepared form is a page left open for you to finish; a run that
-    # opened forty of them would bury the ones that matter
-    "portal_per_run": 5,
+    # A cap bounds the blast radius of any mistake. Five a day, and five forms
+    # a run that couldn't be changed at all, made a job search that never got
+    # going: every role cleared every gate and still waited a week. The caps
+    # are yours to set now (Auto-apply), up to the limits below.
+    "daily_cap": 25,
+    # each prepared form is a page left open for you to finish; in "submit"
+    # mode a form that clears every check is sent and closed instead
+    "portal_per_run": 15,
+    # how many newly found roles a run takes on; the rest wait for the next
+    "discover_per_run": 150,
+    # engine calls going at once while scoring and drafting
+    "engine_workers": 4,
     "signature": "",
     # a draft below this quality score (agent/quality.py) is redrafted once,
     # then held for you — honest isn't the same as good enough to send
@@ -1117,7 +1124,7 @@ def auto_readiness() -> dict:
             reasons[g] = reasons.get(g, 0) + 1
         else:
             sendable += 1
-    _cap = int(cfg.get("daily_cap", 5))
+    _cap = int(cfg.get("daily_cap", 25))
     if settling_in(cfg)["on"]:
         _cap = min(_cap, SETTLE_CAP)
     room = max(0, _cap - _sent_today())
@@ -1130,7 +1137,7 @@ def auto_readiness() -> dict:
                          "fix": "; ".join(f"{n} — {w}" for w, n in top)})
     if sendable and room <= 0:
         notes.append(f"{sendable} would go, but today's cap of "
-                     f"{cfg.get('daily_cap', 5)} is used up.")
+                     f"{cfg.get('daily_cap', 25)} is used up.")
 
     return {"ok": not blockers,
             "settling_in": st,
@@ -1196,6 +1203,61 @@ def _fit_of(r: dict) -> int:
     return int(s) if isinstance(s, (int, float)) else -1
 
 
+# How many engine calls a run may have going at once. A local model serves
+# them one after another anyway; a cloud engine answers them side by side.
+ENGINE_WORKERS_MAX = 8
+
+
+def _claims_instructions(check: dict) -> str:
+    """The claims the check couldn't source, as a redraft instruction."""
+    probs = [p.get("detail", "") for p in (check or {}).get("problems") or [] if p.get("detail")]
+    if not probs:
+        return ""
+    return ("\nYOUR LAST DRAFT FOR THIS ROLE SAID THINGS THE PROFILE CAN'T SUPPORT. "
+            "Write it again without them: drop each of these words or claims "
+            "entirely (don't rephrase them into something similar), and add "
+            "nothing in their place that the PROFILE or CV_EXCERPTS don't show:\n- "
+            + "\n- ".join(probs[:12]))
+
+
+def _repair_draft(key: str, draft: dict, brain, model, cfg: dict) -> dict:
+    """One redraft for a draft that would otherwise be held: told exactly
+    which claims couldn't be sourced and what read weak.
+
+    Unattended, a single unexplained capital ("European", a product the
+    engine guessed at) held the application for you, and at volume that was
+    most of them: the run drafted everything and sent nothing. The check
+    itself is unchanged and reads the new draft as strictly as the first;
+    if the second is no better, the first is kept, and held as before."""
+    from . import quality as _q
+    chk = draft.get("check") or {}
+    q = draft.get("quality") or {}
+    bad_claims = cfg.get("require_clean_check", True) and chk.get("ok") is False
+    weak = bool(q) and q.get("score", 100) < int(cfg.get("min_quality", 60) or 0)
+    if not (bad_claims or weak):
+        return draft
+    fix = (_claims_instructions(chk) if bad_claims else "") + (_q.instructions(q) if weak else "")
+    d2 = draft_application(key, brain, model=model, fix=fix)
+    if not d2.get("ok"):
+        update_role(key, draft=draft, stage="drafted")
+        return draft
+    new = d2.get("draft") or {}
+    n_old = len(chk.get("problems") or [])
+    n_new = len((new.get("check") or {}).get("problems") or [])
+    q_old, q_new = q.get("score", 100), (new.get("quality") or {}).get("score", 100)
+    # fewer unsourced claims wins; on a tie, the better-written one
+    keep_new = (n_new, -q_new) <= (n_old, -q_old)
+    fields = {}
+    if weak:
+        fields["redrafted_for_quality"] = {"before": q_old, "after": q_new}
+    if bad_claims:
+        fields["redrafted_for_claims"] = {"before": n_old, "after": n_new}
+    if not keep_new:
+        fields["draft"] = draft
+    update_role(key, **fields)
+    return new if keep_new else draft
+
+
 def _auto_apply(brain, model, limit, cfg) -> dict:
     from . import outreach
     _undo_rehearsal_stages()
@@ -1203,8 +1265,8 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
     floor = int(cfg["min_score"])
     mode = str(cfg.get("portal_mode", "prepare")).lower()
     sent, held, errors, prepared = [], [], [], []
-    cap = int(cfg.get("daily_cap", 5))
-    portal_room = max(0, int(cfg.get("portal_per_run", 5) or 0))
+    cap = int(cfg.get("daily_cap", 25))
+    portal_room = max(0, int(cfg.get("portal_per_run", 15) or 0))
     settle = settling_in(cfg)
     if settle["on"]:
         cap, portal_room = min(cap, SETTLE_CAP), min(portal_room, SETTLE_CAP)
@@ -1214,55 +1276,78 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
         todo = todo[:limit]
 
     # --- 1. bring every role up to date: score it, draft the good ones ------
-    failed, engine_down, last, streak, skipped = set(), "", "", 0, 0
+    # Several roles at once. One engine call at a time meant a run of 150
+    # roles, at ten seconds a call, took most of an hour before the first
+    # application went anywhere. Each role is still done in order (score,
+    # then draft, then one repair if needed); only different roles overlap.
+    failed, skipped = set(), 0
+    trip = {"down": "", "last": "", "streak": 0}
+    trip_lock = threading.Lock()
+    done_n = [0]
 
     def _engine_failed(r, err):
-        nonlocal last, streak, engine_down
         why = _explain_engine_error(err)
-        errors.append(f"{r['title']}: {why}")
-        failed.add(r["key"])
-        streak = streak + 1 if why == last else 1
-        last = why
-        if streak >= ENGINE_TRIP:
-            engine_down = why
+        with trip_lock:
+            errors.append(f"{r['title']}: {why}")
+            failed.add(r["key"])
+            trip["streak"] = trip["streak"] + 1 if why == trip["last"] else 1
+            trip["last"] = why
+            if trip["streak"] >= ENGINE_TRIP:
+                trip["down"] = why
 
-    for i, r in enumerate(todo, 1):
+    def _engine_ok():
+        with trip_lock:
+            trip["streak"] = 0
+            trip["answered"] = True
+
+    def _bring_up_to_date(r):
+        nonlocal skipped
         key = r["key"]
         needs_score = (r.get("fit") or {}).get("score") is None
         needs_draft = (not needs_score and _fit_of(r) >= floor
                        and not (r.get("draft") or {}).get("body"))
-        if engine_down:
+        if trip["down"]:
             if needs_score or needs_draft:
-                skipped += 1
-                failed.add(key)
-            continue
-        _note("Scoring and drafting", i, len(todo), r.get("title", ""))
+                with trip_lock:
+                    skipped += 1
+                    failed.add(key)
+            return
+        with trip_lock:
+            done_n[0] += 1
+            _note("Scoring and drafting", done_n[0], len(todo), r.get("title", ""))
         try:
             if needs_score:
                 s = score_role(key, brain, model=model)
                 if not s.get("ok"):
                     _engine_failed(r, s["error"])
-                    continue
-                streak = 0
+                    return
+                _engine_ok()
                 r = get_role(key) or r
             if _fit_of(r) >= floor and not (r.get("draft") or {}).get("body"):
                 d = draft_application(key, brain, model=model)
                 if not d.get("ok"):
                     _engine_failed(r, d["error"])
-                    continue
-                streak = 0
-                q = (d.get("draft") or {}).get("quality") or {}
-                if q and q.get("score", 100) < int(cfg.get("min_quality", 60)):
-                    # once more, told exactly what was weak
-                    from . import quality as _q
-                    d2 = draft_application(key, brain, model=model, fix=_q.instructions(q))
-                    if d2.get("ok"):
-                        q2 = (d2.get("draft") or {}).get("quality") or {}
-                        update_role(key, redrafted_for_quality={"before": q.get("score"),
-                                                                "after": q2.get("score")})
+                    return
+                _engine_ok()
+                _repair_draft(key, d.get("draft") or {}, brain, model, cfg)
         except Exception as exc:
-            failed.add(key)
-            errors.append(f"{r.get('title', '?')}: {type(exc).__name__}: {exc}")
+            with trip_lock:
+                failed.add(key)
+                errors.append(f"{r.get('title', '?')}: {type(exc).__name__}: {exc}")
+
+    workers = max(1, min(ENGINE_WORKERS_MAX, int(cfg.get("engine_workers", 4) or 1)))
+    # one at a time until the engine has answered once: a dead engine (no
+    # credit, Ollama stopped) is then asked ENGINE_TRIP times, not once per
+    # role already in flight when the third failure came back
+    rest = list(todo)
+    while rest and (workers == 1 or not trip.get("answered")) and not trip["down"]:
+        _bring_up_to_date(rest.pop(0))
+    if rest:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers,
+                                thread_name_prefix="jobs-engine") as pool:
+            list(pool.map(_bring_up_to_date, rest))
+    engine_down = trip["down"]
     if skipped:
         errors.append(f"{skipped} more role(s) left for the next run: "
                       f"{engine_down}")
@@ -1301,7 +1386,7 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                 wait = _portal_wait(r)
                 submit = mode == "submit" and not dry
                 if not wait and portal_room <= 0:
-                    wait = (f"this run's limit of {cfg.get('portal_per_run', 5)} "
+                    wait = (f"this run's limit of {cfg.get('portal_per_run', 15)} "
                             f"portal form(s) was reached — it is next in line")
                 if not wait and submit and room <= 0:
                     wait = f"daily cap of {cap} reached — queued for tomorrow"
@@ -2196,8 +2281,23 @@ def _matches_profile(job: dict, p: dict) -> bool:
     return hits >= 2
 
 
-def discover(limit: int = 40) -> dict:
-    """Pull fresh roles from the configured boards and record the new ones."""
+# The most each of the run's limits may be set to (jobs/server.py clamps to these)
+LIMITS = {"daily_cap": 200, "portal_per_run": 100, "discover_per_run": 1000,
+          "engine_workers": ENGINE_WORKERS_MAX}
+
+
+def discover(limit: int | None = None) -> dict:
+    """Pull fresh roles from the configured boards and record the new ones.
+
+    It kept the first 40 matches and dropped the rest, every run, whatever
+    the boards had: a search across six boards found hundreds and tracked 40.
+    How many is your setting now (discover_per_run), and roles it already
+    tracks no longer use up that room."""
+    if limit is None:
+        try:
+            limit = int(auto_config().get("discover_per_run") or 150)
+        except Exception:
+            limit = 150
     p = profile()
     # One pass over the sources, done by one function. This had its own copy
     # of the loop — which fetched every source over plain HTTP whatever its
@@ -2235,7 +2335,16 @@ def discover(limit: int = 40) -> dict:
     # source label of its own, which would otherwise appear as a seventh
     # "source" that nobody added
     per_source = {name: per_source.get(name, 0) for name in _raw_per}
-    found = found[:limit]
+    # roles already tracked don't use up the run's room: the room is for new
+    # ones, and a board that lists the same 40 every day filled it with roles
+    # add_roles was going to skip anyway
+    try:
+        have = {r.get("key") for r in roles()} | {k.lower() for k in ignored_keys()}
+        found = [j for j in found if role_key(j) not in have] + \
+                [j for j in found if role_key(j) in have]
+    except Exception:
+        pass
+    found = found[:max(1, int(limit))]
     res = add_roles(found)
     emails = sum(1 for j in found if j.get("apply_email"))
     _audit("discover", f"{res['added']} new of {len(found)} matched; "
@@ -3662,7 +3771,7 @@ def auto_preview() -> dict:
     cfg = auto_config()
     p = profile()
     floor = int(cfg.get("min_score", 75) or 75)
-    cap = int(cfg.get("daily_cap", 5) or 5)
+    cap = int(cfg.get("daily_cap", 25) or 25)
     sent_today = _sent_today()
     room = max(0, cap - sent_today)
 

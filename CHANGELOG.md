@@ -861,3 +861,41 @@ It's the last thing in the file now, and a check makes sure it stays there.
   be brought back by the app, but nothing is dropped from now on.
 - Check: `roles.no_cap_on_how_many_are_kept` (749 runnable pass); 360 roles
   added in three batches are all kept.
+
+### 33. It gets through the whole list now
+
+Asked for: it should work end to end and apply to a lot of jobs. A full cycle
+was run against a 300-role board, a scripted engine and a stand-in mailbox,
+and it found 40 roles, drafted all 40, and sent none. Four things stood in
+the way; all four are fixed.
+
+- **A held draft is repaired once before it's held.** The claims check flags
+  any capitalised word the profile doesn't contain, so one ordinary word in
+  an engine's letter ("European hours") held the application for you, and at
+  volume that was nearly every one. Now a draft the check flags is written
+  again, once, with the engine told exactly which words and claims to drop.
+  The check reads the new draft just as strictly. If the second draft is no
+  better, the first is kept and held as before, so nothing unsourced is ever
+  sent. A weak draft gets the same single redraft, in the same call, told
+  what read weak. Each role records what the repair did
+  (`redrafted_for_claims`, `redrafted_for_quality`).
+- **Several roles at once.** Scoring and drafting made one engine call at a
+  time: 150 roles took 97 seconds against an engine answering in a fifth of a
+  second, and most of an hour against a real one. Four roles now go side by
+  side (Auto-apply → *Engine calls at once*, 1 to 8; use 1 for a slow local
+  model), which brought the same run down to 26 seconds. It still goes one at a time
+  until the engine has answered once, so a dead engine is asked three times,
+  as before, and not once for every role already in flight.
+- **More than 40 new roles a run.** Discovery kept the first 40 matches and
+  dropped the rest every run. That number is now *New roles taken on per
+  run* (default 150, up to 1000). Roles it already tracks no longer use up
+  that room: a board listing the same 40 every day used to fill it with roles
+  that were going to be skipped anyway.
+- **The caps are yours to set.** *Company forms per run* had no setting at
+  all and was fixed at 5. It is on the form now (default 15, up to 100).
+  *Most per day* now defaults to 25 instead of 5, and goes up to 200. Every
+  gate is unchanged: fit threshold, deal-breakers, claims check, quality bar,
+  the settling-in pace for the first three days live, and the email rate
+  limits.
+- Checks: 5 new `volume.*` (778 pass); the window suite and the real-browser
+  layout and navigator checks pass.

@@ -204,7 +204,10 @@
                 <option value="off">Skip them</option>
               </select></div>
             <div class="field"><label>Minimum fit</label><input id="aMin" class="input" type="number" min="0" max="100" /></div>
-            <div class="field"><label>Most per day</label><input id="aCap" class="input" type="number" min="0" max="50" /></div>
+            <div class="field"><label>Most per day</label><input id="aCap" class="input" type="number" min="0" max="200" /></div>
+            <div class="field"><label>Company forms per run</label><input id="aForms" class="input" type="number" min="0" max="100" /></div>
+            <div class="field"><label>New roles taken on per run</label><input id="aFind" class="input" type="number" min="1" max="1000" /></div>
+            <div class="field"><label>Engine calls at once (1 for a slow local model)</label><input id="aWorkers" class="input" type="number" min="1" max="8" /></div>
             <div class="field"><label>Signature</label><textarea id="aSig" class="input" rows="3"></textarea></div>
             <button class="btn primary wide" id="aSave">Save rules</button>
           </div>

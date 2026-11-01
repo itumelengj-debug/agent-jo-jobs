@@ -278,6 +278,12 @@ class JobsAutoBody(BaseModel):
     # many steps (agent/navigator.py)
     explore: bool | None = None
     explore_turns: int | None = None
+    # how much a run gets through: forms per run, new roles per run, and
+    # engine calls at once (agent/jobscout.py LIMITS)
+    portal_per_run: int | None = None
+    discover_per_run: int | None = None
+    engine_workers: int | None = None
+    min_quality: int | None = None
 
 
 @app.post("/api/jobs/auto")
@@ -285,6 +291,12 @@ def jobs_auto(body: JobsAutoBody):
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if "explore_turns" in patch:
         patch["explore_turns"] = max(0, min(40, int(patch["explore_turns"])))
+    for k, top in jobscout.LIMITS.items():
+        if k in patch:
+            low = 1 if k in ("discover_per_run", "engine_workers") else 0
+            patch[k] = max(low, min(top, int(patch[k])))
+    if "min_quality" in patch:
+        patch["min_quality"] = max(0, min(100, int(patch["min_quality"])))
     return {"auto": jobscout.save_auto_config(patch)}
 
 

@@ -1857,7 +1857,10 @@ LOADERS.auto = async function () {
   $("#aDry").checked = a.dry_run !== false;
   $("#aClean").checked = a.require_clean_check !== false;
   $("#aMin").value = a.min_score ?? 75;
-  $("#aCap").value = a.daily_cap ?? 5;
+  $("#aCap").value = a.daily_cap ?? 25;
+  $("#aForms").value = a.portal_per_run ?? 15;
+  $("#aFind").value = a.discover_per_run ?? 150;
+  $("#aWorkers").value = a.engine_workers ?? 4;
   $("#aSig").value = a.signature || "";
   $("#aPortal").value = a.portal_mode || "prepare";
   $("#aDaily").checked = !!(S.data || {}).daily;
@@ -1992,6 +1995,9 @@ async function saveAuto(btn) {
       require_clean_check: $("#aClean").checked,
       portal_mode: $("#aPortal").value,
       min_score: Number($("#aMin").value), daily_cap: Number($("#aCap").value),
+      portal_per_run: Number($("#aForms").value),
+      discover_per_run: Number($("#aFind").value),
+      engine_workers: Number($("#aWorkers").value),
       signature: $("#aSig").value,
     });
     toast("Rules saved.");

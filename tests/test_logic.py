@@ -3111,6 +3111,96 @@ def _auto_apply_checks() -> None:
                   and J.get_role(k3)["stage"] == "found")
         section("auto.engine", engine)
 
+        # --- volume: repair, parallel, and the limits are yours ------------- #
+        def volume():
+            fresh()
+            # a first draft with a word the profile can't source is redrafted
+            # once, told which; the clean second draft is the one that goes
+            asks = []
+
+            class Repairs:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    asks.append(sysx)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90, "verdict": "strong"}))
+                    told = "CAN'T SUPPORT" in sysx and "Kubernetes" in sysx
+                    body = GOOD + ("" if told else " I also run Kubernetes clusters.")
+                    return blk(json.dumps({"subject": "S", "body": body}))
+            k = role("Repairable", email="r@r.test")
+            J.save_auto_config({"min_quality": 0})
+            out = J.auto_apply(Repairs())
+            r = J.get_role(k)
+            check("volume.a_held_claim_is_redrafted_once_and_sent",
+                  r["stage"] == "applied" and "Kubernetes" not in r["draft"]["body"]
+                  and r["redrafted_for_claims"]["before"] >= 1 and r["redrafted_for_claims"]["after"] == 0
+                  and sends and sends[-1][0] == "r@r.test",
+                  f"{out.get('held')} {r.get('redrafted_for_claims')}")
+
+            class Stubborn:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    return blk(json.dumps({"subject": "S",
+                                           "body": GOOD + " I run Kubernetes."}))
+            fresh()
+            k = role("Stubborn", email="s@s.test")
+            J.save_auto_config({"min_quality": 0})
+            out = J.auto_apply(Stubborn())
+            check("volume.a_draft_still_unsourced_after_repair_is_held",
+                  J.get_role(k)["stage"] == "drafted" and not sends
+                  and any("claim" in h["reason"] for h in out["held"]))
+
+            # several roles at once, and every one of them done
+            fresh(engine_workers=4, daily_cap=50, settled=True)
+            import threading as _th
+            live, peak = [0], [0]
+            lock = _th.Lock()
+
+            class Slow:
+                def chat(self, m, s, t=None, **kw):
+                    with lock:
+                        live[0] += 1
+                        peak[0] = max(peak[0], live[0])
+                    _axtime.sleep(0.05)
+                    with lock:
+                        live[0] -= 1
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    return blk(json.dumps({"subject": "S", "body": GOOD}))
+            J.save_auto_config({"min_quality": 0})
+            for i in range(12):
+                role(f"Parallel {i}", email=f"p{i}@p.test")
+            out = J.auto_apply(Slow())
+            check("volume.roles_are_scored_and_drafted_side_by_side",
+                  peak[0] > 1 and peak[0] <= 4 and len(out["sent"]) == 12
+                  and not out["errors"], f"peak={peak[0]} sent={len(out['sent'])} {out['errors'][:2]}")
+
+            # discovery's room is a setting, and roles it already has don't use it
+            fresh(discover_per_run=3)
+            J.save_job_sources([{"name": "V", "kind": "remotive",
+                                 "url": "https://v.test/api", "on": True}])
+            feed = json.dumps({"jobs": [
+                {"title": f"Python Developer {i}", "company_name": f"V{i}",
+                 "url": f"https://v.test/{i}", "candidate_required_location": "Worldwide",
+                 "description": "Python SQL"} for i in range(7)]})
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: feed
+            try:
+                J.save_search_config({"queries": ["python"]})
+                a = J.discover()["added"]
+                b = J.discover()["added"]
+                c = J.discover()["added"]
+            finally:
+                J.JOB_FETCHER = was
+            check("volume.new_roles_per_run_is_a_setting_and_known_ones_dont_use_it",
+                  (a, b, c) == (3, 3, 1), f"{(a, b, c)}")
+            check("volume.the_limits_have_ceilings",
+                  J.LIMITS["daily_cap"] >= 100 and J.LIMITS["engine_workers"] == J.ENGINE_WORKERS_MAX)
+        section("auto.volume", volume)
+
         # --- one run at a time, in the background --------------------------- #
         def runs():
             fresh()
