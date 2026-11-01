@@ -249,4 +249,5 @@ python tools/check_layout.py  # the window, measured in a real browser
 python tools/check_helper.py  # the in-form helper, in a real browser
 python tools/check_answers.py # typed answers saved and reused, in a real browser
 python tools/check_navigator.py # a whole application on an awkward site, in a real browser
+python tools/live_check.py --all # LIVE: your boards, your engine, a test email to yourself, your inbox
 ```

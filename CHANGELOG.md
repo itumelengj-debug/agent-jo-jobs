@@ -968,3 +968,31 @@ broken.
 - README: *Which sites it works with*.
 - Checks: 9 new `trust.*` (793 pass); the window suite and the real-browser
   layout check pass.
+
+### 36. The live check
+
+Asked for: test it against live job boards, a real mail account and a real
+engine. The test suite proves the logic against stand-ins. Only your machine,
+with your settings, can prove the outside world answers.
+`python tools/live_check.py --all` does that, and changes nothing it
+doesn't have to:
+
+- **Boards:** every source you've added is read live (the suggested ones
+  if you haven't added any). For each: how many roles, how fast, the newest
+  posting date, how many have an email address, and how many look like
+  scams or ghost jobs. Nothing is added and no source's status is touched.
+  `--browser` includes browser sources.
+- **Engine:** your engine scores one live role that matches your profile,
+  then drafts a letter for it, with the time each took, the letter's
+  quality and whether the claims check passes. The letter is printed.
+- **Email** (`--email`): one message, to **your own** sending address and
+  never to an employer, carrying the CV an application would. What you
+  receive is what an employer would see.
+- **Inbox** (`--inbox`): logs in and reads the last week, marking nothing
+  as read.
+
+Run here, with no network to the boards and no engine key, it said so for
+each, plainly, and exited 1. Its email step, pointed at a real SMTP server
+on the same machine, delivered the message with its PDF. A full cycle sent
+through that server delivered four applications, each with a 20 KB PDF CV
+made for that company.
