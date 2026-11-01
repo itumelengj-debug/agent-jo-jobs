@@ -922,3 +922,49 @@ the way; all four are fixed.
   ran used to look exactly like one that was working.
 - Checks: 6 new `schedule.*` (784 pass); the window suite and the
   real-browser layout and navigator checks pass.
+
+### 35. Ghost jobs, scams, and a CV with every application
+
+Asked for: the features these apps are adding now. In 2026 that means
+ghost-job and scam detection, and a CV tailored to each advert built into
+the auto-apply flow. Building them turned up two things that were quietly
+broken.
+
+- **Emailed applications had no CV.** The email sender couldn't attach
+  anything, so every emailed application went out as a covering letter
+  alone. Now each one carries a CV: one reordered for that advert if there
+  is one, else the file you uploaded, else a clean PDF made from your
+  profile (Word if the browser isn't there). If no CV can be made, it
+  still sends, and the run report says so.
+  Auto-apply → *Attach a CV to every emailed application*.
+- **A CV for each advert, inside the run.** Once a role's letter is ready
+  to go, the engine reorders your CV for that advert. It's kept only if the
+  CV check finds nothing invented, the same strictness as the letters, and
+  the same file goes to company forms. *Tailor the CV to each advert*.
+- **Ghost jobs** (`agent/trust.py`). Scored 0-100 from the advert alone:
+  up for 30 or 60+ days, reposted with a new date while tracked, "talent
+  pool / future opportunities" wording, the same title listed three or more
+  times at once. At 60 or more it's skipped before any engine call.
+  *Skip likely ghost jobs*.
+- **Scams.** Any one strong sign is enough: a fee to start, a cheque to
+  deposit and send back, payment by gift card or wire, an interview on
+  Telegram or WhatsApp, reshipping parcels, bank or ID details before an
+  interview. Two weaker signs together count too ("earn $900 a week",
+  "no experience needed", a company advert asking for replies at a Gmail
+  address). A scam is set aside in the run and refused at the send gate
+  too, unless you approve it yourself. An advert *about* payments isn't
+  one: the patterns look for the request, not the topic.
+- **Pay**, when the advert gives it ("R45,000 pm", "$120k–$140k per year"),
+  shows on the role. Roles show *scam?* / *ghost?* tags, and the details
+  say why.
+- **Every role was "0 days old".** Its age was read from a field nothing
+  ever wrote, so "freshest first" sorted nothing and no role was ever
+  labelled stale. Every board's own posting date is kept now (Remotive,
+  RemoteOK, RSS, Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
+  Recruitee, Workday's "Posted 3 Days Ago", BambooHR, Personio). Age counts
+  from that date, else from when the role was found.
+- **"No reply after 30 days" counted from the advert**, not from when you
+  applied. It counts from the application now.
+- README: *Which sites it works with*.
+- Checks: 9 new `trust.*` (793 pass); the window suite and the real-browser
+  layout check pass.

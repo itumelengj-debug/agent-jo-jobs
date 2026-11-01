@@ -536,8 +536,12 @@ function drawRoleList() {
            : st === "closed" || st === "expired" || st === "screened" ? " stop" : ""),
         st === "needs_redraft" ? "needs rewriting" : st));
     }
+    // is the advert real, and is it a job at all (agent/trust.py)
+    const tv = (r.trust || {}).verdict;
+    if (tv === "scam") t.appendChild(el("span", "tag stop", "scam?"));
+    else if (tv === "likely_ghost") t.appendChild(el("span", "tag held", "ghost?"));
     body.append(t, el("div", "item-m",
-      [r.company, r.location, r.source].filter(Boolean).join(" · ")));
+      [r.company, r.location, r.salary, r.source].filter(Boolean).join(" · ")));
     const f = fitOf(r);
     const fit = el("div", "fit" + (f >= 75 ? " hi" : f !== undefined && f !== null ? "" : " lo"),
                    f === undefined || f === null ? "—" : String(f));
@@ -1353,8 +1357,16 @@ function openRole(r) {
   facts.append(
     fact("Fit", f === undefined || f === null ? "not scored" : `${f}`, f >= 75),
     fact("Stage", BUCKET[r.bucket] || r.bucket || r.stage || "found"),
-    fact("Apply by", r.apply_email ? "email" : "portal"));
+    fact("Apply by", r.apply_email ? "email" : "portal"),
+    ...(r.salary ? [fact("Pay", r.salary)] : []));
   d.appendChild(facts);
+  const tr = r.trust || {};
+  if (tr.verdict === "scam")
+    d.appendChild(el("p", "prep-gap", "This looks like a scam: " + (tr.scam_why || []).join("; ")
+      + ". It won't be applied to unless you approve it yourself."));
+  else if ((tr.ghost || 0) >= 30)
+    d.appendChild(el("p", "prep-gap", `Ghost-job signs (${tr.ghost}/100): ` + (tr.ghost_why || []).join("; ")
+      + (tr.verdict === "likely_ghost" ? ". Likely not a live vacancy." : ".")));
   if (r.state_why) d.appendChild(el("p", "muted", r.state_why));
   if ((r.must_missing || []).length)
     d.appendChild(el("p", "prep-gap", "Doesn't mention your must-haves: " + r.must_missing.join(", ") + " — worth asking."));
@@ -1861,6 +1873,9 @@ LOADERS.auto = async function () {
   $("#aForms").value = a.portal_per_run ?? 15;
   $("#aFind").value = a.discover_per_run ?? 150;
   $("#aWorkers").value = a.engine_workers ?? 4;
+  $("#aGhosts").checked = a.skip_ghosts !== false;
+  $("#aAttach").checked = a.attach_cv !== false;
+  $("#aTailor").checked = a.tailor_cv !== false;
   $("#aSig").value = a.signature || "";
   $("#aPortal").value = a.portal_mode || "prepare";
   $("#aDaily").checked = !!(S.data || {}).daily;
@@ -2015,6 +2030,9 @@ async function saveAuto(btn) {
       portal_per_run: Number($("#aForms").value),
       discover_per_run: Number($("#aFind").value),
       engine_workers: Number($("#aWorkers").value),
+      skip_ghosts: $("#aGhosts").checked,
+      attach_cv: $("#aAttach").checked,
+      tailor_cv: $("#aTailor").checked,
       signature: $("#aSig").value,
     });
     toast("Rules saved.");

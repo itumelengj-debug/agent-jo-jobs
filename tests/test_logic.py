@@ -3238,6 +3238,108 @@ def _auto_apply_checks() -> None:
                   and 'spec_json="{}"' not in (ROOT / "jobs" / "server.py").read_text("utf-8"))
         section("auto.schedule", schedule)
 
+        # --- ghost jobs, scams, and a CV with every application ------------ #
+        def trusted():
+            import agent.trust as T
+            scam = {"title": "Data Entry", "company": "Fast Cash",
+                    "summary": "Earn $900 per week from home! Pay a registration fee of $50 "
+                               "to start. Interview via Telegram.",
+                    "apply_email": "fastcash1@gmail.com"}
+            pay = {"title": "Payments Engineer", "company": "Paylo",
+                   "summary": "Build our fee engine and bank integrations; card payments and "
+                              "application fees for merchants. $150k-$180k per year."}
+            ghost = {"title": "Data Engineer", "company": "Big Co",
+                     "summary": "Join our talent community for future opportunities.",
+                     "posted_at": "2020-01-01"}
+            check("trust.a_fee_and_a_telegram_interview_is_a_scam",
+                  T.assess(scam)["verdict"] == "scam")
+            check("trust.an_advert_about_fees_is_not_a_scam",
+                  T.assess(pay)["verdict"] == "ok"
+                  and T.assess(pay)["salary"] == "$150k-$180k per year")
+            check("trust.a_talent_pool_left_up_for_years_is_a_ghost",
+                  T.assess(ghost)["verdict"] == "likely_ghost")
+            check("trust.salaries_are_read_and_years_are_not",
+                  T.salary("R45,000 pm") == "R45,000 pm" and T.salary("in 2026, 5 years") == ""
+                  and T.salary("€60.000 - €70.000") == "€60.000 - €70.000")
+            check("trust.posting_dates_are_read_however_boards_send_them",
+                  J._posted("2026-10-30T10:00:00Z") == "2026-10-30"
+                  and J._posted(1761818400000) == J._posted(1761818400)
+                  and J._posted("Thu, 30 Oct 2026 10:00:00 GMT") == "2026-10-30"
+                  and J._posted("Posted 30+ Days Ago") != ""
+                  and J._posted("") == "")
+            check("trust.a_role_is_as_old_as_its_advert",
+                  J.days_listed({"posted_at": "2020-01-01", "found_at": J._iso()}) > 1000
+                  and J.days_listed({"found_at": "2020-01-01 00:00 UTC"}) > 1000)
+
+            # in a cycle: set aside before anything is spent on it
+            fresh(settled=True)
+            J.save_job_sources([{"name": "T", "kind": "remotive", "url": "https://t.test/api", "on": True}])
+            feed = json.dumps({"jobs": [
+                {"title": "Python Developer", "company_name": "Fast Cash", "url": "https://t.test/1",
+                 "candidate_required_location": "Worldwide",
+                 "description": "Python SQL. Pay a registration fee of $50 to start. Interview via Telegram."},
+                {"title": "Python Developer", "company_name": "Pool Co", "url": "https://t.test/2",
+                 "candidate_required_location": "Worldwide", "publication_date": "2020-01-01T00:00:00",
+                 "description": "Python SQL. Join our talent pool for future opportunities."},
+                {"title": "Python Developer", "company_name": "Real Co", "url": "https://t.test/3",
+                 "candidate_required_location": "Worldwide",
+                 "description": "Python SQL Power BI. Apply to jobs@real.test"}]})
+            asked = []
+
+            class Eng:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    asked.append(m[0]["content"][:400])
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    if "prepare a CV" in sysx:
+                        return blk(json.dumps({"headline": "BI lead", "summary": "Tech lead on an FX desk.",
+                                               "key_skills": ["Python", "SQL"],
+                                               "experience": [{"role": "Tech lead", "employer": "Standard Bank",
+                                                               "bullets": ["Built a Medallion pipeline"]}]}))
+                    return blk(json.dumps({"subject": "S", "body": GOOD}))
+            was, was_send = J.JOB_FETCHER, O.send
+            got = []
+            O.send = lambda to, s_, b, **kw: (got.append((to, kw.get("attachments"))) or {"ok": True})
+            J.JOB_FETCHER = lambda url: feed
+            made = {}
+            import agent.resume as _R
+            was_make = _R.make
+
+            def fake_make(role, prof, fmt="pdf", **kw):
+                f = _axc.AGENT_HOME / f"cv-{(role or {}).get('company', 'base')}.{fmt}"
+                f.write_text("cv")
+                made[f.name] = bool(role)
+                return {"ok": True, "path": str(f), "filename": f.name}
+            _R.make = fake_make
+            try:
+                J.save_search_config({"queries": ["python"]})
+                J.save_auto_config({"min_quality": 0, "portal_mode": "off"})
+                out = J.auto_cycle(Eng())
+            finally:
+                J.JOB_FETCHER, O.send, _R.make = was, was_send, was_make
+            st = {r["company"]: r for r in J.roles()}
+            check("trust.scams_and_ghosts_are_set_aside_before_the_engine",
+                  st["Fast Cash"]["stage"] == "closed" and "scam" in st["Fast Cash"]["closed_reason"]
+                  and st["Pool Co"]["stage"] == "closed" and "ghost" in st["Pool Co"]["closed_reason"]
+                  and not any("Fast Cash" in a or "Pool Co" in a for a in asked)
+                  and out.get("scams_skipped") == 1 and out.get("ghosts_skipped") == 1,
+                  f"{out.get('summary')}")
+            check("trust.the_real_one_goes_with_a_cv_made_for_it",
+                  st["Real Co"]["stage"] == "applied" and got
+                  and got[0][0] == "jobs@real.test" and got[0][1]
+                  and got[0][1][0].endswith("cv-Real Co.pdf")
+                  and st["Real Co"]["tailored_cv"]["experience"],
+                  f"{got} {made} {out.get('errors')}")
+            r = J.get_role(st["Fast Cash"]["key"])
+            J.update_role(r["key"], stage="drafted", fit={"score": 95},
+                          draft=dict(CLEAN), apply_email="x@fast.test")
+            check("trust.a_scam_never_passes_the_gate_without_you",
+                  "scam" in J._gate(J.get_role(r["key"]), J.auto_config())
+                  and "scam" not in J._gate({**J.get_role(r["key"]), "approved": True},
+                                            J.auto_config()))
+        section("auto.trust", trusted)
+
         # --- one run at a time, in the background --------------------------- #
         def runs():
             fresh()

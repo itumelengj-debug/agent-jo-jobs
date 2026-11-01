@@ -214,10 +214,11 @@ def add_roles(found: list) -> dict:
     Skips ones already tracked, and ones the user has removed — otherwise
     deleting a role you've decided against just means seeing it again after
     the next scan."""
-    have = {r.get("key") for r in roles()}
-    have |= {k.lower() for k in ignored_keys()}
     rs = roles()
-    added = 0
+    have = {r.get("key") for r in rs}
+    have |= {k.lower() for k in ignored_keys()}
+    by_key = {r.get("key"): r for r in rs}
+    added, touched = 0, False
     for f in found or []:
         title = _as_text(f.get("title")).strip()
         company = _as_text(f.get("company")).strip()
@@ -230,6 +231,20 @@ def add_roles(found: list) -> dict:
             continue
         key = _slug(f"{company}-{title}")
         if key in have or key.lower() in have:
+            # seen again: an advert whose posting date moved forward while
+            # we tracked it was reposted to look new — a ghost-job sign
+            old = by_key.get(key)
+            new_when = _posted(f.get("posted_at"))
+            if old is not None and new_when:
+                if old.get("posted_at") and new_when > old["posted_at"] \
+                        and old.get("stage") in ("found", "drafted"):
+                    old["reposted"] = int(old.get("reposted") or 0) + 1
+                    old["first_posted_at"] = old.get("first_posted_at") or old["posted_at"]
+                    old["posted_at"] = new_when
+                    touched = True
+                elif not old.get("posted_at"):
+                    old["posted_at"] = new_when
+                    touched = True
             continue
         rs.append({
             "key": key, "title": title[:160], "company": company[:120],
@@ -239,14 +254,16 @@ def add_roles(found: list) -> dict:
             "source": _as_text(f.get("source"))[:60],
             "apply_email": _as_text(f.get("apply_email")
                                     or f.get("email"))[:200],
-            "found_at": _iso(), "stage": "found",
+            "found_at": _iso(), "posted_at": _posted(f.get("posted_at")),
+            "stage": "found",
             "fit": None, "draft": None, "events": [],
         })
         have.add(key)
         added += 1
     # every role is kept: trimming to the newest 200 here silently deleted
     # older ones, applications and replies included
-    save_roles(rs)
+    if added or touched:
+        save_roles(rs)
     _audit("found", f"{added} new role(s)")
     return {"ok": True, "added": added, "total": len(roles())}
 
@@ -749,6 +766,16 @@ AUTO_DEFAULTS = {
     "discover_per_run": 150,
     # engine calls going at once while scoring and drafting
     "engine_workers": 4,
+    # adverts that look like a ghost job (up for months, reposted, a "talent
+    # pool") are set aside before any engine call, at or above this score
+    # (agent/trust.py); scams are always set aside, whatever this says
+    "skip_ghosts": True,
+    "ghost_bar": 60,
+    # every emailed application carries a CV: one made for the role (or
+    # yours, as uploaded); and a CV reordered for each advert, checked like
+    # the letters, when the engine can make one that invents nothing
+    "attach_cv": True,
+    "tailor_cv": True,
     "signature": "",
     # a draft below this quality score (agent/quality.py) is redrafted once,
     # then held for you — honest isn't the same as good enough to send
@@ -945,6 +972,87 @@ def _undo_rehearsal_stages() -> int:
 _NO_EMAIL = "no application email on the advert"
 
 
+def check_trust(r: dict, others: list | None = None, save: bool = False) -> dict:
+    """agent/trust.py's reading of one role; with save, kept on the role
+    (trust, and salary when the advert gives one) for the window."""
+    from . import trust as _trust
+    try:
+        t = _trust.assess(r, others)
+    except Exception:
+        return {"verdict": "ok", "ghost": 0, "ghost_why": [], "scam_why": [], "salary": ""}
+    if save and r.get("key"):
+        try:
+            fields = {"trust": t}
+            if t.get("salary") and not r.get("salary"):
+                fields["salary"] = t["salary"]
+            update_role(r["key"], **fields)
+        except Exception:
+            pass
+    return t
+
+
+def cv_file_for(r: dict, p: dict | None = None) -> dict:
+    """The CV file that goes with this application: {path, kind, error}.
+
+    kind is "tailored" (reordered for this advert, and checked), "yours" (the
+    file you uploaded), or "designed" (a clean PDF made from your profile and
+    pasted CV). An emailed application used to go with no CV at all: the
+    letter said "attached" to nothing."""
+    p = p or profile()
+    tcv = r.get("tailored_cv") or {}
+    tailored = bool((tcv.get("summary") or tcv.get("experience"))
+                    and (tcv.get("check") or {}).get("ok", True))
+    cached = str(r.get("cv_file") or "")
+    if tailored and cached and Path(cached).is_file() \
+            and r.get("cv_file_for") == tcv.get("at"):
+        return {"path": cached, "kind": "tailored", "error": ""}
+    if not tailored:
+        own = str(p.get("cv_path") or "")
+        if own and Path(own).is_file():
+            return {"path": own, "kind": "yours", "error": ""}
+        if cached and Path(cached).is_file() and not r.get("cv_file_for"):
+            return {"path": cached, "kind": "designed", "error": ""}
+    from . import resume
+    err = ""
+    for fmt in ("pdf", "docx"):          # a PDF needs the browser; Word doesn't
+        try:
+            made = resume.make(r if tailored else None, p, fmt=fmt)
+        except Exception as exc:
+            made = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if made.get("ok"):
+            if tailored:
+                # one file per role: the tailored CV is named for the company
+                update_role(r["key"], cv_file=made["path"], cv_file_for=tcv.get("at"))
+            return {"path": made["path"], "kind": "tailored" if tailored else "designed",
+                    "error": ""}
+        err = made.get("error", "")
+    if tailored:
+        own = str(p.get("cv_path") or "")
+        if own and Path(own).is_file():
+            return {"path": own, "kind": "yours", "error": ""}
+    return {"path": "", "kind": "", "error": err or "there's no CV to attach yet"}
+
+
+def _tailor_for(key: str, brain, model) -> None:
+    """A CV reordered for this advert, kept only if it invents nothing
+    (agent/cv.py verify_cv, the same strictness as the letters)."""
+    from . import cv as _cv
+    r = get_role(key) or {}
+    if (r.get("tailored_cv") or {}).get("at"):
+        return
+    res = _cv.tailor_cv(r, profile(), brain, model=model)
+    if not res.get("ok"):
+        return
+    cv = res["cv"]
+    if not (cv.get("summary") or cv.get("experience")):
+        return
+    if (cv.get("check") or {}).get("ok") is False:
+        update_role(key, tailored_cv_held=[x.get("detail", "") for x in
+                                           (cv["check"].get("problems") or [])][:6])
+        return
+    update_role(key, tailored_cv=cv)
+
+
 def _gate(r: dict, cfg: dict) -> str:
     """Return '' if this role may be auto-applied to, else why it can't.
 
@@ -957,6 +1065,13 @@ def _gate(r: dict, cfg: dict) -> str:
     hit = deal_breaker(r)
     if hit and not r.get("approved"):
         return f"deal-breaker: “{hit}” is in the advert"
+    # a scam is never applied to by itself, however it got onto the list —
+    # added by hand, found before this check existed. Your approval is the
+    # only way past it.
+    t = check_trust(r)
+    if t["verdict"] == "scam" and not r.get("approved"):
+        from . import trust as _trust
+        return _trust.says(t)
     fit = r.get("fit") or {}
     if fit.get("score") is None:
         return "not scored yet"
@@ -1329,7 +1444,15 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                     _engine_failed(r, d["error"])
                     return
                 _engine_ok()
-                _repair_draft(key, d.get("draft") or {}, brain, model, cfg)
+                fin = _repair_draft(key, d.get("draft") or {}, brain, model, cfg)
+                # a CV made for this advert, once the letter is one that can go
+                if cfg.get("tailor_cv", True) and (fin.get("check") or {}).get("ok", True):
+                    try:
+                        _tailor_for(key, brain, model)
+                    except Exception as exc:
+                        with trip_lock:
+                            errors.append(f"{r.get('title', '?')}: tailoring the CV: "
+                                          f"{type(exc).__name__}: {exc}")
         except Exception as exc:
             with trip_lock:
                 failed.add(key)
@@ -1394,8 +1517,13 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                     held.append({**row, "reason": wait})
                     continue
                 from . import portal as _portal
+                prof = profile()
+                if r.get("tailored_cv") and cfg.get("attach_cv", True):
+                    cvf = cv_file_for(r, prof)
+                    if cvf["kind"] == "tailored":
+                        prof = {**prof, "cv_path": cvf["path"]}
                 try:
-                    res = _portal.apply_to_portal(r, profile(), submit=submit,
+                    res = _portal.apply_to_portal(r, prof, submit=submit,
                                                   brain=brain, model=model)
                 except Exception as exc:
                     res = {"state": "failed",
@@ -1453,7 +1581,15 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                        or f"Application: {r['title']}")
             body = d["body"] + ("\n\n" + cfg["signature"]
                                 if cfg.get("signature") else "")
-            res = outreach.send(r["apply_email"], subject, body, dry_run=dry)
+            files, cv_kind = [], ""
+            if cfg.get("attach_cv", True) and not dry:
+                cvf = cv_file_for(r)
+                if cvf["path"]:
+                    files, cv_kind = [cvf["path"]], cvf["kind"]
+                else:
+                    errors.append(f"{r['title']}: sent without a CV — {cvf['error']}")
+            res = outreach.send(r["apply_email"], subject, body, dry_run=dry,
+                                **({"attachments": files} if files else {}))
             if res.get("ok"):
                 room -= 1
                 if dry:
@@ -1463,7 +1599,8 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
                 else:
                     update_role(key, sent_at=_iso(), sent_dry_run=False)
                     set_stage(key, "applied", "auto-applied")
-                sent.append({**row, "to": r["apply_email"], "dry_run": dry})
+                sent.append({**row, "to": r["apply_email"], "dry_run": dry,
+                             **({"cv": cv_kind} if cv_kind else {})})
             else:
                 errors.append(f"{r['title']}: {res.get('error', 'send failed')}")
         except Exception as exc:
@@ -1524,6 +1661,10 @@ def describe_run(r: dict) -> str:
     bits = []
     if r.get("discovered") is not None:
         bits.append(f"{r.get('discovered') or 0} new role(s) found")
+    if r.get("scams_skipped"):
+        bits.append(f"{r['scams_skipped']} advert(s) that look like scams set aside")
+    if r.get("ghosts_skipped"):
+        bits.append(f"{r['ghosts_skipped']} likely ghost job(s) skipped")
     if r.get("replies"):
         bits.append(f"{r['replies']} repl(y/ies) to your applications read")
     if r.get("interview_prep"):
@@ -2004,6 +2145,41 @@ def _clean_location(loc: str) -> str:
     return re.sub(r"[,\s]+$", "", str(loc or "").strip())
 
 
+def _posted(v) -> str:
+    """The advert's own posting date as YYYY-MM-DD, from whatever the board
+    sends: ISO text, epoch seconds or milliseconds, an RSS date, or
+    Workday's "Posted 3 Days Ago". '' when there is none.
+
+    Every board sends one and every parser dropped it, so a role's age was
+    the day this app first saw it — an advert up for three months looked
+    brand new the day you added the board."""
+    if v in (None, "", 0):
+        return ""
+    now = datetime.now(timezone.utc)
+    try:
+        if isinstance(v, (int, float)) or (isinstance(v, str) and v.strip().isdigit()):
+            n = float(v)
+            n = n / 1000 if n > 1e11 else n
+            return datetime.fromtimestamp(n, timezone.utc).strftime("%Y-%m-%d")
+        t = str(v).strip()
+        low = t.lower()
+        if "today" in low or "just posted" in low:
+            return now.strftime("%Y-%m-%d")
+        if "yesterday" in low:
+            return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        m = re.search(r"(\d+)\+?\s*(day|week|month)s?\s+ago", low)
+        if m:
+            n = int(m.group(1)) * {"day": 1, "week": 7, "month": 30}[m.group(2)]
+            return (now - timedelta(days=n)).strftime("%Y-%m-%d")
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", t)
+        if m:
+            return m.group(1)
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(t).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
 def _parse_remotive(text: str) -> list:
     out = []
     for j in (json.loads(text).get("jobs") or []):
@@ -2014,6 +2190,7 @@ def _parse_remotive(text: str) -> list:
                     "location": _clean_location(j.get("candidate_required_location", "Remote")),
                     "summary": body[:600],
                     "apply_email": _apply_email(body),
+                    "posted_at": _posted(j.get("publication_date")),
                     "source": "Remotive"})
     return out
 
@@ -2031,6 +2208,7 @@ def _parse_remoteok(text: str) -> list:
                     "location": _clean_location(j.get("location") or "Remote"),
                     "summary": body[:600],
                     "apply_email": _apply_email(body),
+                    "posted_at": _posted(j.get("date") or j.get("epoch")),
                     "source": "RemoteOK"})
     return out
 
@@ -2045,7 +2223,7 @@ def _parse_jobs_rss(text: str) -> list:
     for item in root.iter():
         if item.tag.split("}")[-1].lower() not in ("item", "entry"):
             continue
-        title = link = body = ""
+        title = link = body = when = ""
         for c in item:
             tag = c.tag.split("}")[-1].lower()
             if tag == "title":
@@ -2054,6 +2232,8 @@ def _parse_jobs_rss(text: str) -> list:
                 link = (c.get("href") or c.text or "").strip()
             elif tag in ("description", "summary", "content"):
                 body = _strip_html(c.text or "")
+            elif tag in ("pubdate", "published", "updated", "date") and not when:
+                when = _posted(c.text or "")
         if not title:
             continue
         company = ""
@@ -2062,6 +2242,7 @@ def _parse_jobs_rss(text: str) -> list:
         out.append({"title": title, "company": company, "url": link,
                     "location": "Remote", "summary": body[:600],
                     "apply_email": _apply_email(body),
+                    "posted_at": when,
                     "source": "RSS"})
     return out
 
@@ -2167,13 +2348,14 @@ def _ats_company(kind: str) -> str:
     return " ".join(w.capitalize() for w in re.split(r"[-_.]+", slug) if w)
 
 
-def _ats_job(kind, company, title, url, location, body, remote=False) -> dict:
+def _ats_job(kind, company, title, url, location, body, remote=False, posted="") -> dict:
     loc = _clean_location(location or ("Remote" if remote else ""))
     if remote and "remote" not in loc.lower():
         loc = (loc + " (remote)").strip()
     return {"title": title or "", "company": company, "url": url or "",
             "location": loc, "summary": body[:600],
             "apply_email": _apply_email(body),
+            "posted_at": _posted(posted),
             "source": f"{company} ({kind.capitalize()})"}
 
 
@@ -2183,7 +2365,8 @@ def _parse_greenhouse(text: str) -> list:
     return [_ats_job("greenhouse", j.get("company_name") or company,
                      j.get("title"), j.get("absolute_url"),
                      (j.get("location") or {}).get("name", ""),
-                     _strip_html(_html.unescape(j.get("content") or "")))
+                     _strip_html(_html.unescape(j.get("content") or "")),
+                     posted=j.get("first_published") or j.get("updated_at"))
             for j in (json.loads(text).get("jobs") or [])
             if isinstance(j, dict)]
 
@@ -2195,7 +2378,8 @@ def _parse_lever(text: str) -> list:
                      (j.get("categories") or {}).get("location", ""),
                      j.get("descriptionPlain")
                      or _strip_html(j.get("description") or ""),
-                     remote=str(j.get("workplaceType", "")).lower() == "remote")
+                     remote=str(j.get("workplaceType", "")).lower() == "remote",
+                     posted=j.get("createdAt"))
             for j in (data if isinstance(data, list) else [])
             if isinstance(j, dict)]
 
@@ -2206,7 +2390,7 @@ def _parse_ashby(text: str) -> list:
                      j.get("jobUrl") or j.get("applyUrl"), j.get("location", ""),
                      j.get("descriptionPlain")
                      or _strip_html(j.get("descriptionHtml") or ""),
-                     remote=bool(j.get("isRemote")))
+                     remote=bool(j.get("isRemote")), posted=j.get("publishedAt"))
             for j in (json.loads(text).get("jobs") or [])
             if isinstance(j, dict) and j.get("isListed", True)]
 
@@ -2232,7 +2416,8 @@ def _parse_workable(text: str) -> list:
         out.append(_ats_job("workable", company, j.get("title"),
                             _first(j.get("url"), j.get("shortlink"), j.get("application_url")),
                             where, _strip_html(_first(j.get("description"), j.get("full_description"))),
-                            remote=bool(j.get("telecommuting") or j.get("remote"))))
+                            remote=bool(j.get("telecommuting") or j.get("remote")),
+                            posted=_first(j.get("published_on"), j.get("published"), j.get("created_at"))))
     return out
 
 
@@ -2251,7 +2436,8 @@ def _parse_smartrecruiters(text: str) -> list:
                             _first(loc.get("fullLocation"),
                                    ", ".join(x for x in (loc.get("city"), str(loc.get("country") or "").upper())
                                              if x)),
-                            _strip_html(_first(j.get("jobAd"), "")), remote=bool(loc.get("remote"))))
+                            _strip_html(_first(j.get("jobAd"), "")), remote=bool(loc.get("remote")),
+                            posted=j.get("releasedDate")))
     return out
 
 
@@ -2265,7 +2451,8 @@ def _parse_recruitee(text: str) -> list:
                             j.get("title"), _first(j.get("careers_url"), j.get("url")),
                             _first(j.get("location"), ", ".join(x for x in (j.get("city"), j.get("country")) if x)),
                             _strip_html(_first(j.get("description"), "") + " " + _first(j.get("requirements"), "")),
-                            remote=bool(j.get("remote"))))
+                            remote=bool(j.get("remote")),
+                            posted=_first(j.get("published_at"), j.get("created_at"))))
     return out
 
 
@@ -2283,7 +2470,8 @@ def _parse_workday(text: str) -> list:
         url = f"https://{host}/{site}{path}" if host and path else ""
         out.append(_ats_job("workday", company, j.get("title"), url, _first(j.get("locationsText"), ""),
                             " ".join(str(x) for x in j.get("bulletFields") or []),
-                            remote="remote" in str(j.get("locationsText") or "").lower()))
+                            remote="remote" in str(j.get("locationsText") or "").lower(),
+                            posted=j.get("postedOn")))
     return out
 
 
@@ -2304,7 +2492,7 @@ def _parse_bamboohr(text: str) -> list:
         url = f"https://{sub}.bamboohr.com/careers/{j.get('id')}" if sub and j.get("id") else ""
         out.append(_ats_job("bamboohr", company, j.get("jobOpeningName"), url, where,
                             " ".join(x for x in (j.get("departmentLabel"), j.get("employmentStatusLabel")) if x),
-                            remote=bool(j.get("isRemote"))))
+                            remote=bool(j.get("isRemote")), posted=j.get("datePosted")))
     return out
 
 
@@ -2324,7 +2512,8 @@ def _parse_personio(text: str) -> list:
         body = " ".join((jd.findtext("value") or "") for jd in pos.iter("jobDescription"))
         url = f"https://{host}/job/{get('id')}" if host and get("id") else ""
         out.append(_ats_job("personio", _first(get("subcompany"), company), get("name"), url, get("office"),
-                            _strip_html(body), remote="remote" in get("office").lower()))
+                            _strip_html(body), remote="remote" in get("office").lower(),
+                            posted=get("createdAt")))
     return out
 
 
@@ -2621,8 +2810,24 @@ def auto_cycle(brain, model=None) -> dict:
     # then drop the obviously-wrong ones for free
     screened = 0
     p = profile()
-    for r in roles():
+    acfg = auto_config()
+    trust_out = {"scams": 0, "ghosts": 0}
+    everyone = roles()
+    for r in everyone:
         if r.get("stage") != "found" or (r.get("fit") or {}).get("score"):
+            continue
+        # not a real vacancy, or not a real job: set aside before anything
+        # is spent on it. You can bring one back from Closed.
+        t = check_trust(r, everyone, save=True)
+        if not r.get("approved") and (
+                t["verdict"] == "scam"
+                or (acfg.get("skip_ghosts", True)
+                    and t["ghost"] >= int(acfg.get("ghost_bar", 60) or 60))):
+            from . import trust as _trust
+            update_role(r["key"], stage="closed",
+                        closed_reason=f"screened out: {_trust.says(t) or 'likely a ghost job'}")
+            trust_out["scams" if t["verdict"] == "scam" else "ghosts"] += 1
+            screened += 1
             continue
         ps = prescreen(r, p)
         if not ps["pass"]:
@@ -2631,6 +2836,7 @@ def auto_cycle(brain, model=None) -> dict:
                         ats=ps["score"])
             screened += 1
     out["screened_out"] = screened
+    out["scams_skipped"], out["ghosts_skipped"] = trust_out["scams"], trust_out["ghosts"]
     # replies first: a role that has had an answer shouldn't be chased
     try:
         from . import inbox
@@ -3822,13 +4028,21 @@ def check_expiry(role: dict) -> dict:
 
 
 def days_listed(role: dict) -> float:
-    added = (role or {}).get("added_at") or ""
-    for fmt in ("%Y-%m-%d %H:%M UTC", "%Y-%m-%d"):
-        try:
-            when = datetime.strptime(added, fmt).replace(tzinfo=timezone.utc)
-            return (datetime.now(timezone.utc) - when).total_seconds() / 86400
-        except Exception:
+    """Days since the advert went up: its own posting date, else the day it
+    was found. This read "added_at", which nothing ever wrote, so every role
+    was 0 days old: "freshest first" ordered nothing, and no role was ever
+    labelled stale."""
+    for k in ("posted_at", "added_at", "found_at"):
+        v = str((role or {}).get(k) or "")
+        if not v:
             continue
+        for fmt in ("%Y-%m-%d %H:%M UTC", "%Y-%m-%d"):
+            try:
+                when = datetime.strptime(v if "UTC" in fmt else v[:10], fmt)
+                when = when.replace(tzinfo=timezone.utc)
+                return max(0.0, (datetime.now(timezone.utc) - when).total_seconds() / 86400)
+            except Exception:
+                continue
     return 0.0
 
 
@@ -4119,8 +4333,12 @@ def archive_closed(also_applied_before_days: int = 0) -> dict:
     cutoff_days = int(also_applied_before_days or 0)
     for r in roles():
         st = role_state(r)["bucket"]
+        # days since you applied, not since the advert went up: an advert a
+        # month old that you applied to yesterday hasn't had its 30 days
+        since = r.get("sent_at") or r.get("applied_at") or ""
+        waited = days_listed({"added_at": since}) if since else days_listed(r)
         old_application = (cutoff_days and st == "applied"
-                           and days_listed(r) >= cutoff_days)
+                           and waited >= cutoff_days)
         if st in ("closed", "expired") or old_application:
             moved.append({**r, "archived_at": _now_iso(),
                           "archived_because": ("no reply after "

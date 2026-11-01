@@ -292,6 +292,11 @@ class JobsAutoBody(BaseModel):
     discover_per_run: int | None = None
     engine_workers: int | None = None
     min_quality: int | None = None
+    # ghost jobs and scams (agent/trust.py), and the CV that goes with each
+    skip_ghosts: bool | None = None
+    ghost_bar: int | None = None
+    attach_cv: bool | None = None
+    tailor_cv: bool | None = None
 
 
 @app.post("/api/jobs/auto")
@@ -305,6 +310,8 @@ def jobs_auto(body: JobsAutoBody):
             patch[k] = max(low, min(top, int(patch[k])))
     if "min_quality" in patch:
         patch["min_quality"] = max(0, min(100, int(patch["min_quality"])))
+    if "ghost_bar" in patch:
+        patch["ghost_bar"] = max(30, min(100, int(patch["ghost_bar"])))
     return {"auto": jobscout.save_auto_config(patch)}
 
 
@@ -1419,7 +1426,12 @@ def jobs_list():
                            days_listed=round(jobscout.days_listed(r)),
                            bucket=jobscout.role_state(r, _cfg)["bucket"],
                            state_why=jobscout.role_state(r, _cfg)["why"],
-                           must_missing=jobscout.must_haves_missing(r))
+                           must_missing=jobscout.must_haves_missing(r),
+                           # roles found by a search or added by hand have
+                           # no reading yet; it's free, so it's done here
+                           **({} if r.get("trust") else
+                              (lambda t: {"trust": t, "salary": r.get("salary") or t.get("salary", "")})(
+                                  jobscout.check_trust(r))))
                       for r in jobscout.roles()],
             "profile": jobscout.profile(),
             "auto": jobscout.auto_config(),
