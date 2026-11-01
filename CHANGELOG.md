@@ -1024,3 +1024,49 @@ made for that company.
   follow-up; a third run sent none.
 - Checks: 5 new `followup.*` / `fetch.*` (798 pass); the window suite and
   the layout check pass.
+
+### 38. It reads the whole advert, and keeps every role on a listings page
+
+Found by running a full cycle over real HTTP, against a job site on the same
+machine: a listings page of 30 adverts, each with a schema.org JobPosting
+block. 30 roles were found, 3 were kept, and the engine had never seen a
+whole advert.
+
+- **The engine judged every role on its first 600 characters.** Adverts were
+  cut to a 600-character summary when saved. Scoring, drafting, CV
+  tailoring, the ATS scan, the quality check and the mock interview all
+  read a `description` field that was never saved. Adverts open with the
+  company blurb, so the requirements were usually past the cut. Every
+  board's full text is kept now (up to 4,000 characters), and the claims
+  check may echo any of it.
+- **A role with only a title is read from its advert page.** A listings
+  page gives a title and a link, an RSS feed a line or two. Before scoring,
+  up to 40 such roles a run are read from their own page, four at a time,
+  at the polite pace. The JobPosting block is read first when there is one
+  (the format job pages publish for Google): the full description, the
+  posting and closing dates, the pay and the employer. Otherwise it reads
+  the page's main text, without its menus and footer. An advert whose
+  closing date has passed is closed. An application address in the advert
+  is kept, so the role goes by email rather than as a form for you to
+  finish. LinkedIn, Indeed, Glassdoor and Seek are never read. A page that
+  can't be read changes nothing and isn't tried every run.
+  Auto-apply → *Read the full advert when a board shows only a title*.
+- **Every "Data Engineer" on a listings page was the same role.** With no
+  company, a role's key was its title alone, so add_roles kept the first of
+  each title. The duplicate check then merged the rest by title, leaving
+  three roles from thirty. Without a company, a role is now keyed by its
+  site and a fingerprint of its link, and only the same advert counts as a
+  duplicate. Adverts are read before duplicates are merged, so the
+  employer's name is known by then, and the same vacancy on two boards at a
+  named company still merges.
+- **A thin JobPosting block kept its dates.** Its date, pay and employer are
+  kept even when its description is too short to use, and its words are
+  read with the page's. A five-month-old "talent pool" advert had looked
+  brand new.
+- Over real HTTP and real SMTP: all 30 roles kept and read; 15
+  application addresses found in the adverts (the listings page showed
+  none); 15 applications delivered, each with a PDF CV; the scam, the
+  expired advert and the five-month-old talent pool closed; the engine saw
+  the requirements in 27 of 28 scorings.
+- Checks: 8 new `adverts.*` (806 pass); the window suite and the layout
+  and navigator checks pass.

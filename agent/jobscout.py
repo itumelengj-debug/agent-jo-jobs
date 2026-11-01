@@ -218,6 +218,8 @@ def add_roles(found: list) -> dict:
     have = {r.get("key") for r in rs}
     have |= {k.lower() for k in ignored_keys()}
     by_key = {r.get("key"): r for r in rs}
+    # the same advert is the same role, whatever it's called this time
+    have_urls = {normalise_url(_as_text(r.get("url"))) for r in rs if r.get("url")}
     added, touched = 0, False
     for f in found or []:
         title = _as_text(f.get("title")).strip()
@@ -229,7 +231,10 @@ def add_roles(found: list) -> dict:
         if not _looks_like_a_real_role({**f, "title": title,
                                         "company": company}):
             continue
-        key = _slug(f"{company}-{title}")
+        key = _key_for(company, title, _as_text(f.get("url")))
+        url_n = normalise_url(_as_text(f.get("url"))) if f.get("url") else ""
+        if not company and url_n and url_n in have_urls:
+            continue
         if key in have or key.lower() in have:
             # seen again: an advert whose posting date moved forward while
             # we tracked it was reposted to look new — a ghost-job sign
@@ -251,6 +256,10 @@ def add_roles(found: list) -> dict:
             "url": _as_text(f.get("url"))[:500],
             "location": _as_text(f.get("location"))[:120],
             "summary": _as_text(f.get("summary"))[:600],
+            # the whole advert, for scoring, drafting and the checks: they all
+            # read "description", which was never kept, so the engine judged
+            # every role on its first 600 characters — usually the company blurb
+            "description": _as_text(f.get("description"))[:ADVERT_CHARS],
             "source": _as_text(f.get("source"))[:60],
             "apply_email": _as_text(f.get("apply_email")
                                     or f.get("email"))[:200],
@@ -259,6 +268,8 @@ def add_roles(found: list) -> dict:
             "fit": None, "draft": None, "events": [],
         })
         have.add(key)
+        if url_n:
+            have_urls.add(url_n)
         added += 1
     # every role is kept: trimming to the newest 200 here silently deleted
     # older ones, applications and replies included
@@ -385,7 +396,7 @@ def _profile_corpus(p: dict, role: dict | None = None) -> str:
     if role:
         # terms lifted from the advert itself are fair to echo back
         bits += [_as_text(role.get("title")), _as_text(role.get("company")),
-                 _as_text(role.get("summary"))]
+                 _as_text(role.get("summary")), _as_text(role.get("description"))]
     return " ".join(bits).lower()
 
 
@@ -786,6 +797,9 @@ AUTO_DEFAULTS = {
     # one short follow-up to an emailed application that has had no reply
     # after this many days — sent only where applications are (not in
     # rehearsal), checked like the letters, never a second time
+    # read the advert page for roles that arrived with little text
+    "read_adverts": True,
+    "read_per_run": 40,
     "auto_follow_up": True,
     "follow_up_after_days": 7,
     "follow_ups_per_run": 10,
@@ -1680,6 +1694,10 @@ def describe_run(r: dict) -> str:
         bits.append(f"{r['ghosts_skipped']} likely ghost job(s) skipped")
     if r.get("replies"):
         bits.append(f"{r['replies']} repl(y/ies) to your applications read")
+    if r.get("adverts_read"):
+        bits.append(f"{r['adverts_read']} advert(s) read in full"
+                    + (f", {r['emails_found_in_adverts']} with an application address"
+                       if r.get("emails_found_in_adverts") else ""))
     if r.get("followed_up"):
         bits.append(f"{r['followed_up']} follow-up(s) sent")
     elif r.get("follow_ups_drafted"):
@@ -2213,7 +2231,7 @@ def _parse_remotive(text: str) -> list:
                     "company": j.get("company_name", ""),
                     "url": j.get("url", ""),
                     "location": _clean_location(j.get("candidate_required_location", "Remote")),
-                    "summary": body[:600],
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
                     "apply_email": _apply_email(body),
                     "posted_at": _posted(j.get("publication_date")),
                     "source": "Remotive"})
@@ -2231,7 +2249,7 @@ def _parse_remoteok(text: str) -> list:
                     "company": j.get("company", ""),
                     "url": j.get("url", ""),
                     "location": _clean_location(j.get("location") or "Remote"),
-                    "summary": body[:600],
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
                     "apply_email": _apply_email(body),
                     "posted_at": _posted(j.get("date") or j.get("epoch")),
                     "source": "RemoteOK"})
@@ -2266,6 +2284,7 @@ def _parse_jobs_rss(text: str) -> list:
             company, title = [p.strip() for p in title.split(":", 1)]
         out.append({"title": title, "company": company, "url": link,
                     "location": "Remote", "summary": body[:600],
+                    "description": body[:ADVERT_CHARS],
                     "apply_email": _apply_email(body),
                     "posted_at": when,
                     "source": "RSS"})
@@ -2378,7 +2397,7 @@ def _ats_job(kind, company, title, url, location, body, remote=False, posted="")
     if remote and "remote" not in loc.lower():
         loc = (loc + " (remote)").strip()
     return {"title": title or "", "company": company, "url": url or "",
-            "location": loc, "summary": body[:600],
+            "location": loc, "summary": body[:600], "description": body[:ADVERT_CHARS],
             "apply_email": _apply_email(body),
             "posted_at": _posted(posted),
             "source": f"{company} ({kind.capitalize()})"}
@@ -2896,8 +2915,20 @@ def auto_cycle(brain, model=None) -> dict:
         out["with_email"] = d.get("with_email", 0)
     except Exception as exc:
         out["errors"].append(f"discovery: {type(exc).__name__}: {exc}")
+    # read the advert itself where the board gave little more than a title,
+    # so the screens, the score and the letter have the requirements to go on
+    acfg = auto_config()
+    if acfg.get("read_adverts", True):
+        _note("Reading the adverts")
+        try:
+            er = enrich_roles(limit=int(acfg.get("read_per_run", 40) or 0))
+            out["adverts_read"] = er["read"]
+            out["emails_found_in_adverts"] = er["emails"]
+            out["closed_by_date"] = er["closed"]
+        except Exception as exc:
+            out["errors"].append(f"reading adverts: {type(exc).__name__}: {exc}")
     # collapse the same vacancy found on several boards before spending
-    # anything on it
+    # anything on it (after reading the adverts, which names the companies)
     try:
         d2 = dedupe_roles()
         out["deduped"] = d2.get("removed", 0)
@@ -2906,7 +2937,6 @@ def auto_cycle(brain, model=None) -> dict:
     # then drop the obviously-wrong ones for free
     screened = 0
     p = profile()
-    acfg = auto_config()
     trust_out = {"scams": 0, "ghosts": 0}
     everyone = roles()
     for r in everyone:
@@ -3270,9 +3300,23 @@ def search(query: str = "", limit: int = 40) -> dict:
             "rejected": rejected, "errors": errors}
 
 
+def _key_for(company: str, title: str, url: str = "") -> str:
+    """Company and title — or, with no company (a listings page gives a
+    title and a link), the site and a fingerprint of the link. Keyed on the
+    title alone, every "Data Engineer" on a listings page was the same role,
+    and only the first was ever kept."""
+    company, title, url = (company or "").strip(), (title or "").strip(), (url or "").strip()
+    if company or not url:
+        return _slug(f"{company}-{title}")
+    import hashlib
+    host = re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", url).split(".")[0]
+    return _slug(f"{host}-{title}-{hashlib.sha1(url.encode('utf-8')).hexdigest()[:6]}")
+
+
 def role_key(job: dict) -> str:
     """The key a role is stored under — the one definition of "same role"."""
-    return _slug(f"{_as_text(job.get('company'))}-{_as_text(job.get('title'))}")
+    return _key_for(_as_text(job.get("company")), _as_text(job.get("title")),
+                    _as_text(job.get("url")))
 
 
 def mark_tracked(results: list) -> list:
@@ -3995,9 +4039,14 @@ def dedupe_roles(forget: bool = False) -> dict:
     rs = roles()
     groups = {}
     for r in rs:
+        company = (r.get("company") or "").strip().lower()
+        # with no company the title says nothing about which vacancy it is:
+        # every "Data Engineer" on a listings page had the same key, and a
+        # page of thirty roles was merged down to one per title. Without a
+        # company, only the same advert is the same role.
         key = (_norm_title(r.get("title", "")),
-               (r.get("company") or "").strip().lower())
-        if not key[0]:
+               company or "url:" + normalise_url(_as_text(r.get("url"))))
+        if not key[0] or key[1] == "url:":
             continue
         groups.setdefault(key, []).append(r)
     dropped = []
@@ -4099,6 +4148,149 @@ def mark_closed(key: str, reason: str, expired: bool = False) -> dict:
     _audit("closed", f"{r.get('title', key)}: {reason[:120]}")
     return {"ok": True, "key": key, "closed_at": _now_iso(),
             "reason": reason, "expired": bool(expired)}
+
+
+ADVERT_CHARS = 4000        # enough for the requirements; the payloads stay small
+ENRICH_BELOW = 400         # an advert shorter than this is read from its page
+NEVER_READ = ("linkedin.com", "indeed.", "glassdoor.", "seek.com")
+
+
+def _jsonld_postings(soup) -> list:
+    """schema.org JobPosting blocks — what job pages publish for Google's job
+    search: the full description, dates, pay and the employer, as data."""
+    out = []
+    for tag in soup.find_all("script", type=lambda t: t and "ld+json" in t.lower()):
+        try:
+            data = json.loads(tag.string or tag.get_text() or "")
+        except Exception:
+            continue
+        stack = [data]
+        while stack:
+            x = stack.pop()
+            if isinstance(x, list):
+                stack.extend(x)
+            elif isinstance(x, dict):
+                t = x.get("@type")
+                if t == "JobPosting" or (isinstance(t, list) and "JobPosting" in t):
+                    out.append(x)
+                stack.extend(v for k, v in x.items() if k == "@graph")
+    return out
+
+
+def _pay_of(jp: dict) -> str:
+    bs = jp.get("baseSalary") or {}
+    if not isinstance(bs, dict):
+        return ""
+    v = bs.get("value") or {}
+    cur = bs.get("currency") or ""
+    if isinstance(v, dict):
+        lo, hi = v.get("minValue"), v.get("maxValue")
+        amt = v.get("value")
+        unit = str(v.get("unitText") or "").lower()
+        def f(n):
+            try:
+                return f"{float(n):,.0f}"
+            except Exception:
+                return str(n)
+        span = (f"{f(lo)}–{f(hi)}" if lo and hi and lo != hi else f(lo or hi or amt)) if (lo or hi or amt) else ""
+        return " ".join(x for x in (cur, span, f"per {unit}" if unit else "") if x).strip()
+    return ""
+
+
+def read_advert(html: str) -> dict:
+    """{text, posted_at, closes_at, salary, company} from an advert page."""
+    from bs4 import BeautifulSoup
+    import html as _h
+    soup = BeautifulSoup(html or "", "html.parser")
+    meta = {"posted_at": "", "closes_at": "", "salary": "", "company": ""}
+    for jp in _jsonld_postings(soup):
+        org = jp.get("hiringOrganization") or {}
+        # the dates, pay and employer are worth keeping even when the block's
+        # description is too thin to use: a five-month-old "talent pool"
+        # advert lost its date with its description, and looked brand new
+        meta = {"posted_at": _posted(jp.get("datePosted")),
+                "closes_at": _posted(jp.get("validThrough")),
+                "salary": _pay_of(jp),
+                "company": (org.get("name") if isinstance(org, dict) else "") or ""}
+        thin = _h.unescape(_strip_html(str(jp.get("description") or "")))
+        if len(thin) > 80:
+            return {"text": thin[:ADVERT_CHARS], **meta, "from": "jobposting"}
+        break
+    else:
+        thin = ""
+    for t in soup(["script", "style", "noscript", "nav", "header", "footer", "form", "svg"]):
+        t.decompose()
+    main = soup.find("main") or soup.find("article") or soup.find(attrs={"role": "main"}) or soup.body or soup
+    text = " ".join(x for x in (thin, " ".join(main.get_text(" ").split())) if x)
+    return {"text": text[:ADVERT_CHARS], **meta, "from": "page"}
+
+
+def enrich_role(role: dict) -> dict:
+    """Read the advert itself for a role that arrived with little or no text
+    (a listings page gives a title and a link, an RSS feed a line or two).
+
+    Scored on a title alone, a role was a guess; with no address in its
+    snippet, it went to the portal path even when the advert said "email
+    your CV to…". What the page says is kept: the text, its posting and
+    closing dates, its pay, and an application address if it has one. An
+    advert whose closing date has passed is closed. A page that can't be
+    read changes nothing."""
+    url = str((role or {}).get("url") or "")
+    if not url or any(h in url.lower() for h in NEVER_READ):
+        return {"state": "skipped"}
+    try:
+        html = _fetch_source(url)
+    except Exception as exc:
+        return {"state": "unreadable", "why": _explain_fetch_error(f"{type(exc).__name__}: {exc}", url)}
+    a = read_advert(html)
+    text = a["text"]
+    fields = {"enriched_at": _iso()}
+    if len(text) > len(_as_text(role.get("description"))):
+        fields["description"] = text
+        if not role.get("summary"):
+            fields["summary"] = text[:600]
+    if a["posted_at"] and not role.get("posted_at"):
+        fields["posted_at"] = a["posted_at"]
+    if a["salary"] and not role.get("salary"):
+        fields["salary"] = a["salary"]
+    if a["company"] and not _as_text(role.get("company")).strip():
+        fields["company"] = a["company"][:120]
+    mail = _apply_email(text)
+    if mail and not role.get("apply_email"):
+        fields["apply_email"] = mail
+    update_role(role["key"], **fields)
+    if a["closes_at"] and a["closes_at"] < datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+        mark_closed(role["key"], f"the advert closed on {a['closes_at']}", expired=True)
+        return {"state": "closed", "fields": sorted(fields)}
+    return {"state": "read", "fields": sorted(fields), "from": a["from"]}
+
+
+def enrich_roles(limit: int = 40, workers: int = 4) -> dict:
+    """enrich_role for the roles that need it most: new, unscored, short."""
+    todo = [r for r in roles()
+            if r.get("stage") == "found" and not (r.get("fit") or {}).get("score")
+            and not r.get("enriched_at") and r.get("url")
+            and len(_as_text(r.get("description")) or _as_text(r.get("summary"))) < ENRICH_BELOW]
+    todo = todo[:max(0, int(limit))]
+    out = {"read": 0, "closed": 0, "unreadable": 0, "emails": 0}
+    if not todo:
+        return out
+    from concurrent.futures import ThreadPoolExecutor
+    had = {r["key"]: bool(r.get("apply_email")) for r in todo}
+    with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="jobs-read") as pool:
+        res = list(pool.map(enrich_role, todo))
+    for r, x in zip(todo, res):
+        st = x.get("state")
+        if st in ("read", "closed"):
+            out["read"] += 1
+        if st == "closed":
+            out["closed"] += 1
+        if st == "unreadable":
+            out["unreadable"] += 1
+            update_role(r["key"], enriched_at=_iso())   # tried; not again every run
+        if st == "read" and not had[r["key"]] and "apply_email" in (x.get("fields") or []):
+            out["emails"] += 1
+    return out
 
 
 def check_expiry(role: dict) -> dict:

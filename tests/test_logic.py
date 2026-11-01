@@ -3187,7 +3187,7 @@ def _auto_apply_checks() -> None:
                  "url": f"https://v.test/{i}", "candidate_required_location": "Worldwide",
                  "description": "Python SQL"} for i in range(7)]})
             was = J.JOB_FETCHER
-            J.JOB_FETCHER = lambda url: feed
+            J.JOB_FETCHER = lambda url: feed if "/api" in url else "<html><body></body></html>"
             try:
                 J.save_search_config({"queries": ["python"]})
                 a = J.discover()["added"]
@@ -3301,7 +3301,7 @@ def _auto_apply_checks() -> None:
             was, was_send = J.JOB_FETCHER, O.send
             got = []
             O.send = lambda to, s_, b, **kw: (got.append((to, kw.get("attachments"))) or {"ok": True})
-            J.JOB_FETCHER = lambda url: feed
+            J.JOB_FETCHER = lambda url: feed if "/api" in url else "<html><body></body></html>"
             made = {}
             import agent.resume as _R
             was_make = _R.make
@@ -3397,6 +3397,81 @@ def _auto_apply_checks() -> None:
                   "proxy" in J._explain_fetch_error("ProxyError: 403 Forbidden")
                   and "blocks automated" in J._explain_fetch_error("HTTPStatusError: 403 Forbidden"))
         section("auto.followups", followups)
+
+        # --- the whole advert, read from its page where the board gave little #
+        def adverts():
+            ld = {"@context": "https://schema.org", "@type": "JobPosting", "title": "Data Engineer",
+                  "description": "<p>About us: we make maps.</p><p>" + "You will build pipelines. " * 20
+                                 + "Requirements: Python, dbt, Airflow. Apply to hiring@maps.test</p>",
+                  "datePosted": "2026-10-28", "validThrough": "2099-01-01",
+                  "hiringOrganization": {"@type": "Organization", "name": "Maps"},
+                  "baseSalary": {"@type": "MonetaryAmount", "currency": "ZAR",
+                                 "value": {"@type": "QuantitativeValue", "minValue": 50000,
+                                           "maxValue": 70000, "unitText": "MONTH"}}}
+            page = ("<html><head><script type='application/ld+json'>" + json.dumps(ld)
+                    + "</script></head><body><nav>Home Jobs</nav><main>ignored</main></body></html>")
+            a = J.read_advert(page)
+            check("adverts.a_jobposting_block_is_read_as_data",
+                  "Airflow" in a["text"] and a["posted_at"] == "2026-10-28"
+                  and a["salary"] == "ZAR 50,000–70,000 per month" and a["company"] == "Maps",
+                  f"{a}")
+            plain = J.read_advert("<html><body><nav>Menu Login</nav><main><h1>BI Developer</h1>"
+                                  "<p>Power BI and SQL, three days in the office.</p></main>"
+                                  "<footer>© Co</footer></body></html>")
+            check("adverts.without_one_the_main_text_is_read",
+                  "Power BI and SQL" in plain["text"] and "Menu" not in plain["text"]
+                  and "©" not in plain["text"])
+
+            fresh()
+            long_body = "Company blurb. " * 60 + " Must have: Kubernetes and Terraform."
+            J.add_roles([{"title": "Platform Engineer", "company": "Longco", "url": "https://l.test/1",
+                          "summary": long_body[:600], "description": long_body}])
+            r = [x for x in J.roles() if x["company"] == "Longco"][0]
+            check("adverts.the_whole_advert_is_kept_not_its_first_600_characters",
+                  "Kubernetes" in r["description"] and "Kubernetes" not in r["summary"]
+                  and "kubernetes" in J._advert_text(r))
+
+            pages = {"https://m.test/job/1": page,
+                     "https://m.test/job/2": page.replace("2099-01-01", "2020-01-01"),
+                     "https://m.test/job/3": "<html><body><main>" + "Real words. " * 50 + "</main></body></html>"}
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: pages[url]
+            try:
+                J.add_roles([{"title": "Data Engineer", "company": "Maps", "url": "https://m.test/job/1"},
+                             {"title": "Old Engineer", "company": "Maps", "url": "https://m.test/job/2"},
+                             {"title": "Plain Role", "company": "Plain", "url": "https://m.test/job/3"},
+                             {"title": "On LinkedIn", "company": "LI", "url": "https://www.linkedin.com/jobs/view/1"}])
+                er = J.enrich_roles()
+                again = J.enrich_roles()
+            finally:
+                J.JOB_FETCHER = was
+            by = {x["title"]: x for x in J.roles()}
+            check("adverts.a_short_role_is_read_from_its_page",
+                  "Airflow" in by["Data Engineer"]["description"]
+                  and by["Data Engineer"]["apply_email"] == "hiring@maps.test"
+                  and by["Data Engineer"]["salary"].startswith("ZAR")
+                  and by["Data Engineer"]["posted_at"] == "2026-10-28"
+                  and er["emails"] == 1, f"{er} {by['Data Engineer']}")
+            check("adverts.a_closing_date_in_the_past_closes_it",
+                  by["Old Engineer"]["stage"] == "closed" and er["closed"] == 1)
+            check("adverts.linkedin_is_never_read_and_nothing_is_read_twice",
+                  not by["On LinkedIn"].get("enriched_at") and again["read"] == 0)
+            # a listings page: same title, no company, different adverts
+            fresh()
+            J.add_roles([{"title": "Data Engineer", "company": "", "url": f"https://board.test/job/{i}"}
+                         for i in range(5)])
+            J.add_roles([{"title": "Data Engineer", "company": "", "url": "https://board.test/job/0"}])
+            five = [r for r in J.roles() if r["title"] == "Data Engineer"]
+            J.dedupe_roles()
+            check("adverts.five_roles_with_one_title_on_a_listings_page_stay_five",
+                  len(five) == 5 and len([r for r in J.roles() if r["title"] == "Data Engineer"]) == 5
+                  and len({r["key"] for r in five}) == 5, f"{[r['key'] for r in five]}")
+            J.add_roles([{"title": "Data Engineer", "company": "Acme", "url": "https://a.test/1",
+                          "apply_email": "a@a.test"},
+                         {"title": "Senior Data Engineer", "company": "Acme", "url": "https://b.test/9"}])
+            check("adverts.the_same_vacancy_at_a_named_company_still_merges",
+                  J.dedupe_roles().get("removed") == 1)
+        section("auto.adverts", adverts)
 
         # --- one run at a time, in the background --------------------------- #
         def runs():

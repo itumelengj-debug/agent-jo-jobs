@@ -298,6 +298,7 @@ class JobsAutoBody(BaseModel):
     attach_cv: bool | None = None
     tailor_cv: bool | None = None
     auto_follow_up: bool | None = None
+    read_adverts: bool | None = None
     follow_up_after_days: int | None = None
 
 

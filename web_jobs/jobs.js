@@ -1877,6 +1877,7 @@ LOADERS.auto = async function () {
   $("#aAttach").checked = a.attach_cv !== false;
   $("#aTailor").checked = a.tailor_cv !== false;
   $("#aFollow").checked = a.auto_follow_up !== false;
+  $("#aRead").checked = a.read_adverts !== false;
   $("#aFollowDays").value = a.follow_up_after_days ?? 7;
   $("#aSig").value = a.signature || "";
   $("#aPortal").value = a.portal_mode || "prepare";
@@ -2036,6 +2037,7 @@ async function saveAuto(btn) {
       attach_cv: $("#aAttach").checked,
       tailor_cv: $("#aTailor").checked,
       auto_follow_up: $("#aFollow").checked,
+      read_adverts: $("#aRead").checked,
       follow_up_after_days: Number($("#aFollowDays").value),
       signature: $("#aSig").value,
     });
