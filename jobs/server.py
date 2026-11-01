@@ -297,6 +297,8 @@ class JobsAutoBody(BaseModel):
     ghost_bar: int | None = None
     attach_cv: bool | None = None
     tailor_cv: bool | None = None
+    auto_follow_up: bool | None = None
+    follow_up_after_days: int | None = None
 
 
 @app.post("/api/jobs/auto")
@@ -310,6 +312,8 @@ def jobs_auto(body: JobsAutoBody):
             patch[k] = max(low, min(top, int(patch[k])))
     if "min_quality" in patch:
         patch["min_quality"] = max(0, min(100, int(patch["min_quality"])))
+    if "follow_up_after_days" in patch:
+        patch["follow_up_after_days"] = max(2, min(30, int(patch["follow_up_after_days"])))
     if "ghost_bar" in patch:
         patch["ghost_bar"] = max(30, min(100, int(patch["ghost_bar"])))
     return {"auto": jobscout.save_auto_config(patch)}

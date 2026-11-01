@@ -354,6 +354,13 @@ _STOP = {
     "Hiring", "Manager", "Recruiter", "Recruitment", "Sir", "Madam", "Mr", "Mrs", "Ms",
     "Yours", "Warm", "Cheers", "Please", "Attached", "Looking", "Happy", "Glad",
     "Also", "Since", "After", "Before", "Over", "Today", "Currently", "Recently",
+    # words that open a sentence and can never be a claim — a follow-up that
+    # began "Following up on…" was held for mentioning "Following"
+    "Following", "Just", "Further", "Regarding", "Re", "Hope", "Wanted", "Writing",
+    "Apologies", "Any", "Let", "Would", "Could", "Should", "Here", "There", "These",
+    "Those", "What", "Which", "How", "Why", "Where", "Last", "Next", "Earlier",
+    "Previously", "Additionally", "However", "Meanwhile", "Yes", "Either", "Both",
+    "Having", "Given", "Ahead", "Separately", "Finally", "First", "Firstly",
 }
 
 
@@ -776,6 +783,12 @@ AUTO_DEFAULTS = {
     # the letters, when the engine can make one that invents nothing
     "attach_cv": True,
     "tailor_cv": True,
+    # one short follow-up to an emailed application that has had no reply
+    # after this many days — sent only where applications are (not in
+    # rehearsal), checked like the letters, never a second time
+    "auto_follow_up": True,
+    "follow_up_after_days": 7,
+    "follow_ups_per_run": 10,
     "signature": "",
     # a draft below this quality score (agent/quality.py) is redrafted once,
     # then held for you — honest isn't the same as good enough to send
@@ -1667,6 +1680,10 @@ def describe_run(r: dict) -> str:
         bits.append(f"{r['ghosts_skipped']} likely ghost job(s) skipped")
     if r.get("replies"):
         bits.append(f"{r['replies']} repl(y/ies) to your applications read")
+    if r.get("followed_up"):
+        bits.append(f"{r['followed_up']} follow-up(s) sent")
+    elif r.get("follow_ups_drafted"):
+        bits.append(f"{r['follow_ups_drafted']} follow-up(s) drafted for you")
     if r.get("interview_prep"):
         bits.append(f"interview prep ready for {len(r['interview_prep'])} role(s)")
     if r.get("digest"):
@@ -2095,6 +2112,14 @@ def fetch_with_browser(url: str) -> str:
 def _explain_fetch_error(err: str, url: str = "") -> str:
     e = " ".join(str(err or "").split())
     low = e.lower()
+    # A proxy between you and the site said no (a work or school network, a
+    # VPN, a locked-down server). That read as "the site blocks automated
+    # readers" and sent people to the browser option, which goes through the
+    # same proxy and fails the same way.
+    if "proxyerror" in low or "tunnel" in low or "proxy" in low:
+        return ("your network's proxy refused the connection — the site itself "
+                "was never reached. On a work or school network, or behind a VPN, "
+                "ask for the site to be allowed, or try from another network.")
     if "403" in low or "forbidden" in low:
         return ("blocks automated readers (403). Try 'Use browser' — it loads "
                 "the page properly, which most of these accept.")
@@ -2668,7 +2693,7 @@ _FOLLOWUP_SYSTEM = (
     "{{\"subject\": str, \"body\": str}}.")
 
 
-def draft_follow_up(key: str, brain, model=None) -> dict:
+def draft_follow_up(key: str, brain, model=None, fix: str = "") -> dict:
     r = get_role(key)
     if r is None:
         return {"ok": False, "error": "no such role"}
@@ -2687,7 +2712,8 @@ def draft_follow_up(key: str, brain, model=None) -> dict:
         kw = {"model": model} if model else {}
         data = _json_from(brain.chat(
             [{"role": "user", "content": payload}],
-            [_FOLLOWUP_SYSTEM.format(days=days) + _style_clause(("length",))], None, **kw))
+            [_FOLLOWUP_SYSTEM.format(days=days) + _style_clause(("length",)) + _banned_clause()
+             + (fix or "")], None, **kw))
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     body = _as_text(data.get("body"))
@@ -2696,6 +2722,76 @@ def draft_follow_up(key: str, brain, model=None) -> dict:
           "check": check, "at": _iso(), "days": days}
     update_role(key, follow_up=fu)
     return {"ok": True, "follow_up": fu}
+
+
+def send_follow_ups(brain, model=None, cfg: dict | None = None) -> dict:
+    """One follow-up to each emailed application that has gone quiet.
+
+    The app could draft a follow-up and never sent one: every application
+    that got no answer simply waited. A short note a week later is the
+    cheapest thing in the whole pipeline and one of the few that reliably
+    raises the reply rate. The rails:
+
+      * only applications that went by email, to the address they went to,
+        and only once — a role that has had its follow-up never gets another;
+      * only after replies are read (auto_cycle runs this after the inbox), so
+        anyone who has answered — yes or no — has left "applied" and isn't
+        chased;
+      * the follow-up passes the same claims check as the letter, or it is
+        kept for you instead of sent;
+      * in rehearsal, or a level that doesn't send email, it is drafted for
+        you and nothing goes."""
+    from . import outreach
+    cfg = cfg or auto_config()
+    out = {"sent": [], "drafted": [], "held": [], "errors": []}
+    if not cfg.get("auto_follow_up", True) or not cfg.get("enabled"):
+        return out
+    live = (not cfg.get("dry_run", True)) and cfg.get("deliver", True)
+    days = max(2, int(cfg.get("follow_up_after_days", 7) or 7))
+    room = max(0, int(cfg.get("follow_ups_per_run", 10) or 0))
+    due = [r for r in follow_ups(days)
+           if _as_text(r.get("apply_email")).strip() and not r.get("follow_up_sent_at")
+           and not r.get("sent_dry_run")]
+    due.sort(key=lambda r: -int(r.get("silent_days") or 0))
+    for r in due[:room]:
+        key = r["key"]
+        row = {"key": key, "title": r.get("title", ""), "company": r.get("company", "")}
+        fu = r.get("follow_up") or {}
+        if not fu.get("body"):
+            d = draft_follow_up(key, brain, model=model)
+            if not d.get("ok"):
+                out["errors"].append(f"{row['title']}: follow-up: {d.get('error', '')}")
+                continue
+            fu = d["follow_up"]
+            if (fu.get("check") or {}).get("ok") is False:
+                # once more, told what to drop — as the letters get
+                d2 = draft_follow_up(key, brain, model=model,
+                                     fix=_claims_instructions(fu.get("check")))
+                if d2.get("ok"):
+                    fu = d2["follow_up"]
+        if (fu.get("check") or {}).get("ok") is False:
+            out["held"].append({**row, "reason": "the follow-up claims something your "
+                                                 "profile can't support — needs your eyes"})
+            continue
+        if not live:
+            out["drafted"].append(row)
+            continue
+        orig = _as_text((r.get("draft") or {}).get("subject")).strip() or f"Application: {r.get('title', '')}"
+        subject = _as_text(fu.get("subject")).strip() or ("Re: " + orig)
+        body = fu["body"] + ("\n\n" + cfg["signature"] if cfg.get("signature") else "")
+        res = outreach.send(r["apply_email"], subject, body)
+        if res.get("ok"):
+            update_role(key, follow_up_sent_at=_iso())
+            events = list((get_role(key) or {}).get("events") or [])
+            events.append({"at": _iso(), "stage": "applied",
+                           "note": f"followed up after {r.get('silent_days')} days"})
+            update_role(key, events=events)
+            out["sent"].append({**row, "to": r["apply_email"]})
+        else:
+            out["errors"].append(f"{row['title']}: follow-up: {res.get('error', 'not sent')}")
+    if out["sent"] or out["drafted"]:
+        _audit("follow-up", f"{len(out['sent'])} sent, {len(out['drafted'])} drafted")
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -2855,6 +2951,15 @@ def auto_cycle(brain, model=None) -> dict:
         out["known_people_roles"] = contacts.flag_roles()
     except Exception as exc:
         out["errors"].append(f"contacts: {type(exc).__name__}: {exc}")
+    # a week of silence after an emailed application: one short follow-up.
+    # After the inbox, so nobody who has answered is chased.
+    try:
+        fu = send_follow_ups(brain, model)
+        out["followed_up"] = len(fu["sent"])
+        out["follow_ups_drafted"] = len(fu["drafted"])
+        out["errors"] += fu["errors"]
+    except Exception as exc:
+        out["errors"].append(f"follow-ups: {type(exc).__name__}: {exc}")
     # an interview invitation deserves preparation before you open the email
     try:
         out["interview_prep"] = prepare_interviews(brain, model)

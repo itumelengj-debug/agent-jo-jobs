@@ -996,3 +996,31 @@ each, plainly, and exited 1. Its email step, pointed at a real SMTP server
 on the same machine, delivered the message with its PDF. A full cycle sent
 through that server delivered four applications, each with a 20 KB PDF CV
 made for that company.
+
+### 37. One follow-up, sent for you, and an honest word about proxies
+
+- **Quiet applications get one follow-up.** The app could draft a follow-up
+  but never sent one, so every application that got no answer just waited.
+  Each run now sends one short follow-up to every emailed application with
+  no reply after 7 days (Auto-apply → *Follow up after*, 2-30; up to 10 a
+  run). It goes once, to the address the application went to, threaded as
+  "Re: …". It runs after the inbox is read, so anyone who has answered,
+  yes or no, isn't chased. Form applications aren't followed up: there's
+  no address to write to. The follow-up passes the same claims check as
+  the letters, gets the same one-time repair redraft, and is held for you
+  if it still claims too much. In rehearsal it's drafted and nothing goes.
+  Switch: *Follow up once on emailed applications with no reply*.
+- **"Following" is not a claim.** A follow-up beginning "Following up on…"
+  was held for mentioning "Following". Words that open a sentence and can
+  never be a claim ("Following", "Just", "Regarding", "However", "First",
+  …) are no longer flagged.
+- **A proxy's "no" is no longer blamed on the site.** A connection refused
+  by a proxy (a work or school network, a VPN, a locked-down server) was
+  reported as "blocks automated readers (403), try Use browser". The
+  browser goes through the same proxy and fails the same way. Now it says
+  the proxy refused and the site was never reached.
+- Through a real SMTP server: two applications sent; eight days later the
+  one whose company had replied wasn't chased and the other got one
+  follow-up; a third run sent none.
+- Checks: 5 new `followup.*` / `fetch.*` (798 pass); the window suite and
+  the layout check pass.

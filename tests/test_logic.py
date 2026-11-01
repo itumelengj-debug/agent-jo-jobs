@@ -3340,6 +3340,64 @@ def _auto_apply_checks() -> None:
                                             J.auto_config()))
         section("auto.trust", trusted)
 
+        # --- one follow-up to an application that has gone quiet ----------- #
+        def followups():
+            fresh(settled=True)
+            sent_fu = []
+            was = O.send
+            O.send = lambda to, s_, b, **kw: (sent_fu.append((to, s_, b)) or {"ok": True})
+
+            class FU:
+                def chat(self, m, s, t=None, **kw):
+                    return blk(json.dumps({"subject": "Re: Application",
+                                           "body": "Following up on my application. I built a "
+                                                   "Medallion pipeline in Python at Standard Bank."}))
+            old = "2000-01-01 00:00 UTC"
+            quiet = role("Quiet", fit=90, email="q@q.test", draft=dict(CLEAN),
+                         stage="applied", stage_at=old, sent_at=old)
+            fresh_ = role("Recent", fit=90, email="r@r.test", draft=dict(CLEAN),
+                          stage="applied", stage_at=J._iso(), sent_at=J._iso())
+            answered = role("Answered", fit=90, email="a@a.test", draft=dict(CLEAN),
+                            stage="responded", stage_at=old)
+            portal_ = role("ViaForm", fit=90, draft=dict(CLEAN), stage="applied", stage_at=old)
+            try:
+                J.save_auto_config({"dry_run": False})
+                one = J.send_follow_ups(FU())
+                two = J.send_follow_ups(FU())
+            finally:
+                O.send = was
+            check("followup.a_quiet_emailed_application_gets_one_follow_up",
+                  [x[0] for x in sent_fu] == ["q@q.test"] and len(one["sent"]) == 1
+                  and J.get_role(quiet).get("follow_up_sent_at"),
+                  f"{sent_fu} {one}")
+            check("followup.never_twice_never_the_recent_the_answered_or_a_form",
+                  not two["sent"] and len(sent_fu) == 1)
+
+            class Invents:
+                def chat(self, m, s, t=None, **kw):
+                    return blk(json.dumps({"subject": "Re", "body": "I also run Kubernetes clusters at Google."}))
+            fresh(settled=True)
+            k = role("Fibber", fit=90, email="f@f.test", draft=dict(CLEAN),
+                     stage="applied", stage_at=old, sent_at=old)
+            sent_fu.clear()
+            O.send = lambda to, s_, b, **kw: (sent_fu.append(to) or {"ok": True})
+            try:
+                J.save_auto_config({"dry_run": False})
+                held = J.send_follow_ups(Invents())
+                J.save_auto_config({"dry_run": True})
+                J.update_role(k, follow_up=None)
+                rehearsed = J.send_follow_ups(FU())
+            finally:
+                O.send = was
+            check("followup.an_invented_claim_is_held_not_sent",
+                  held["held"] and not held["sent"])
+            check("followup.rehearsal_drafts_and_sends_nothing",
+                  rehearsed["drafted"] and not sent_fu, f"{rehearsed} {sent_fu}")
+            check("fetch.a_proxy_refusal_is_not_blamed_on_the_site",
+                  "proxy" in J._explain_fetch_error("ProxyError: 403 Forbidden")
+                  and "blocks automated" in J._explain_fetch_error("HTTPStatusError: 403 Forbidden"))
+        section("auto.followups", followups)
+
         # --- one run at a time, in the background --------------------------- #
         def runs():
             fresh()
