@@ -1864,8 +1864,25 @@ LOADERS.auto = async function () {
   $("#aSig").value = a.signature || "";
   $("#aPortal").value = a.portal_mode || "prepare";
   $("#aDaily").checked = !!(S.data || {}).daily;
+  drawSchedule((S.data || {}).schedule);
   drawAutoPreview();
 };
+
+// When the scheduled run next goes, and how the last one went — a schedule
+// that never ran used to look exactly like one that was working.
+function drawSchedule(sc) {
+  const note = $("#aSchedNote");
+  if (!note) return;
+  sc = sc || {};
+  if ($("#aEvery")) $("#aEvery").value = String(sc.every_hours || 0);
+  const when = (t) => t ? new Date(t * 1000).toLocaleString([], {
+    weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const bits = [];
+  if (sc.on && sc.next_run) bits.push(`Next run ${when(sc.next_run)}.`);
+  if (sc.last_run) bits.push(`Last run ${when(sc.last_run)}: ${sc.last_status === "error" ? "failed — " : ""}${sc.last_summary || sc.last_status || "done"}.`);
+  if (!sc.on) bits.push("Off — runs only when you press Run once now.");
+  note.textContent = bits.join(" ");
+}
 
 // Why nothing will send, stated before you go looking. Auto-apply is guarded
 // by several separate conditions, and when one was off the run just reported
@@ -2972,14 +2989,25 @@ async function boot() {
     toast(x.note || "The daily loop is set up.");
     LOADERS.auto();
   }));
+  $("#aEvery").addEventListener("change", async (e) => {
+    try {
+      const x = await api("/api/jobs/schedule", {
+        enabled: $("#aDaily").checked, every_hours: Number(e.target.value) });
+      drawSchedule(x.schedule);
+      toast($("#aDaily").checked ? `Scheduled run: ${x.schedule.says}.`
+                                 : `Saved — it will run ${x.schedule.says} once switched on.`);
+    } catch (err) { toast(err.message, "bad"); }
+  });
   $("#aDaily").addEventListener("change", async (e) => {
     try {
-      await api("/api/jobs/schedule", { enabled: e.target.checked });
+      const x = await api("/api/jobs/schedule", {
+        enabled: e.target.checked, every_hours: Number($("#aEvery").value) });
+      drawSchedule(x.schedule);
       // it said "never sends by itself", which was never true: the daily run
       // sends whatever clears every gate, unless rehearsal is on
       toast(e.target.checked
-        ? "Daily run on — it finds, scores and drafts, and sends only what clears every gate (nothing while Rehearsal is on)."
-        : "Daily run off.");
+        ? `Scheduled run on, ${x.schedule.says} — it finds, scores and drafts, and sends only what clears every gate (nothing while Rehearsal is on).`
+        : "Scheduled run off.");
     } catch (err) { e.target.checked = !e.target.checked; toast(err.message, "bad"); }
   });
 

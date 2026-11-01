@@ -219,7 +219,18 @@
             <button class="btn" id="aRun">Run once now</button>
             <button class="btn ghost" id="aPilot">Set up the daily loop</button>
           </div>
-          <label class="toggle" style="margin-top:14px"><input type="checkbox" id="aDaily" /><span>Daily scan at 07:00 — finds, scores, drafts</span></label>
+          <label class="toggle" style="margin-top:14px"><input type="checkbox" id="aDaily" /><span>Scheduled run — finds, scores, drafts, and applies within your rules</span></label>
+          <div class="field"><label>How often</label>
+            <select id="aEvery" class="select">
+              <option value="0">Once a day, at 07:00</option>
+              <option value="12">Every 12 hours</option>
+              <option value="8">Every 8 hours</option>
+              <option value="6">Every 6 hours</option>
+              <option value="4">Every 4 hours</option>
+              <option value="3">Every 3 hours</option>
+              <option value="2">Every 2 hours</option>
+            </select></div>
+          <p class="muted" id="aSchedNote"></p>
         </article>
       </div>
       <div class="grid-2">

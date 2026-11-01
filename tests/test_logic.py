@@ -3201,6 +3201,43 @@ def _auto_apply_checks() -> None:
                   J.LIMITS["daily_cap"] >= 100 and J.LIMITS["engine_workers"] == J.ENGINE_WORKERS_MAX)
         section("auto.volume", volume)
 
+        # --- the scheduled run: it is due, and as often as you say ---------- #
+        def schedule():
+            import agent.scheduler as _sch
+            fresh()
+            m = _RMS(db_path=_axc.AGENT_HOME / "sched.db", check_same_thread=False)
+            # the old autopilot button's schedule: no spec, no next run
+            m.create_schedule(name="Job scout — daily", prompt="find and apply",
+                              spec_json="{}", action="jobscout", payload="{}")
+            check("schedule.a_schedule_with_no_next_run_is_repaired",
+                  J.repair_schedule(m, _sch)
+                  and m.due_schedules(_axtime.time() + 2 * 86400)
+                  and J.schedule_enabled(m))
+            J.set_schedule(m, _sch, True)
+            check("schedule.switching_on_twice_keeps_one_schedule",
+                  len([x for x in m.list_schedules() if x["action"] == "jobscout"]) == 1)
+            J.set_schedule(m, _sch, True, every_hours=4)
+            row = m.list_schedules()[0]
+            check("schedule.every_n_hours_starts_soon_and_repeats",
+                  json.loads(row["spec"]) == {"kind": "minutes", "n": 240}
+                  and row["next_run"] - _axtime.time() < 300
+                  and J.schedule_info(m)["says"] == "every 4 hours")
+            try:
+                J.set_schedule(m, _sch, True, every_hours=5)
+                bad = False
+            except ValueError:
+                bad = True
+            check("schedule.only_the_offered_intervals", bad)
+            J.set_schedule(m, _sch, False)
+            check("schedule.off_means_no_schedule_at_all",
+                  not J.schedule_enabled(m)
+                  and not [x for x in m.list_schedules() if x["action"] == "jobscout"])
+            check("schedule.the_autopilot_uses_the_same_schedule_maker",
+                  "jobscout.set_schedule(mem, scheduler, True)" in
+                  (ROOT / "jobs" / "server.py").read_text("utf-8")
+                  and 'spec_json="{}"' not in (ROOT / "jobs" / "server.py").read_text("utf-8"))
+        section("auto.schedule", schedule)
+
         # --- one run at a time, in the background --------------------------- #
         def runs():
             fresh()

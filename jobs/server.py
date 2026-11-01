@@ -184,6 +184,14 @@ def tick_schedules() -> dict:
 
 def start_scheduler() -> None:
     import threading
+    # a cycle schedule left with no next run (the old autopilot button made
+    # those) is never due; put it right before the loop starts looking
+    try:
+        if jobscout.repair_schedule(get_memory(), scheduler):
+            print("Agent Jo Jobs: the scheduled run had no next run and would never "
+                  "have started; it's repaired.")
+    except Exception as exc:
+        print(f"Agent Jo Jobs: couldn't check the scheduled run: {type(exc).__name__}: {exc}")
     t = threading.Thread(target=_run_due_schedules, daemon=True)
     t.start()
 
@@ -1256,21 +1264,20 @@ def jobs_autopilot():
     cfg = jobscout.auto_config()
     jobscout.save_auto_config({**cfg, "enabled": True,
                                "dry_run": cfg.get("dry_run", True)})
-    existing = [s2 for s2 in memory.list_schedules()
-                if (s2.get("action") or "") == "jobscout"]
-    if existing:
-        for s2 in existing:
-            memory.set_schedule_enabled(s2["id"], True)
-        return {"ok": True, "created": False,
-                "note": "The daily run was already set up; it's enabled."}
-    memory.create_schedule(
-        name="Job scout — daily", prompt="find and apply", spec_json="{}",
-        action="jobscout", payload="{}")
-    return {"ok": True, "created": True,
-            "dry_run": jobscout.auto_config().get("dry_run", True),
-            "note": ("It will find, de-duplicate, screen, score, draft and "
-                     "apply once a day. Rehearsal is on, so nothing is sent "
-                     "until you turn it off.")}
+    # This made a schedule of its own with no time and no next run, so it was
+    # never due: "Set up the daily loop" set up nothing. It goes through the
+    # same schedule-maker as the Daily switch now.
+    mem = get_memory()
+    existed = jobscout.schedule_enabled(mem)
+    on = jobscout.set_schedule(mem, scheduler, True)
+    info = jobscout.schedule_info(mem)
+    dry = jobscout.auto_config().get("dry_run", True)
+    return {"ok": on, "created": not existed, "dry_run": dry, "schedule": info,
+            "note": ((f"It was already set up; it runs {info['says']}." if existed else
+                      f"It will find, de-duplicate, screen, score, draft and apply "
+                      f"{info['says']}.")
+                     + (" Rehearsal is on, so nothing is sent until you turn it off."
+                        if dry else ""))}
 
 
 @app.post("/api/jobs/prune")
@@ -1419,7 +1426,8 @@ def jobs_list():
             "summary": jobscout.summary(),
             "follow_ups": jobscout.follow_ups(),
             "interviews": _interviews.upcoming(jobscout.roles()),
-            "daily": jobscout.schedule_enabled(memory)}
+            "daily": jobscout.schedule_enabled(get_memory()),
+            "schedule": jobscout.schedule_info(get_memory())}
 
 
 # --- when the interview is, and a calendar file for it (agent/interviews.py) #
@@ -1747,12 +1755,18 @@ def jobs_stage(body: JobsStageBody):
 
 class JobsDailyBody(BaseModel):
     enabled: bool
+    # 0 = once a day at 07:00; else every this many hours (jobscout.EVERY_HOURS)
+    every_hours: int | None = None
 
 
 @app.post("/api/jobs/schedule")
 def jobs_schedule(body: JobsDailyBody):
-    return {"daily": jobscout.set_schedule(memory, scheduler,
-                                           bool(body.enabled))}
+    if body.every_hours is not None and body.every_hours not in jobscout.EVERY_HOURS:
+        raise HTTPException(status_code=400,
+                            detail=f"every_hours must be one of {list(jobscout.EVERY_HOURS)}")
+    mem = get_memory()
+    on = jobscout.set_schedule(mem, scheduler, bool(body.enabled), body.every_hours)
+    return {"daily": on, "schedule": jobscout.schedule_info(mem)}
 
 
 

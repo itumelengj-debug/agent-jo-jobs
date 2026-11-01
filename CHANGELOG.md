@@ -899,3 +899,26 @@ the way; all four are fixed.
   limits.
 - Checks: 5 new `volume.*` (778 pass); the window suite and the real-browser
   layout and navigator checks pass.
+
+### 34. The scheduled run runs, and as often as you like
+
+- **"Set up the daily loop" set up nothing.** The button made its own
+  schedule, with an empty spec and no next run, and the scheduler only picks
+  up schedules that have one, so it never came due. It wasn't recorded
+  either, so the Daily switch beside it read off. Pressing the button again
+  when a schedule existed cleared that schedule's next run, so it also
+  stopped a daily run that was working. The button and the switch now go
+  through the same schedule-maker. It adopts and repairs a schedule that
+  already exists rather than adding a second one, and there is only ever
+  one cycle schedule, so the cycle can't run twice. A broken one left by the
+  old button is repaired when the app starts, and it says so.
+- **As often as you say.** Auto-apply → *How often*: once a day at 07:00, or
+  every 12, 8, 6, 4, 3 or 2 hours. A run every few hours finds roles in their
+  first hours, when an application is most likely to be read. The first
+  timed run starts within two minutes of switching on. All of a day's runs
+  share the day's cap.
+- **You can see it's working.** Under the switch: when the next run is, and
+  what the last one did, or that it failed and why. A schedule that never
+  ran used to look exactly like one that was working.
+- Checks: 6 new `schedule.*` (784 pass); the window suite and the
+  real-browser layout and navigator checks pass.

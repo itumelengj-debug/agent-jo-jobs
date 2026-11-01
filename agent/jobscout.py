@@ -1605,43 +1605,152 @@ def save_config(cfg: dict) -> None:
     _cfg_path().write_text(json.dumps(cfg), "utf-8")
 
 
-def schedule_enabled(memory) -> bool:
-    sid = load_config().get("schedule_id")
-    if not sid:
-        return False
+# How often the cycle may run: once a day at 07:00, or every N hours. A run
+# every few hours catches roles in their first hours, when an application is
+# most likely to be read; the day's cap is shared by all of a day's runs.
+EVERY_HOURS = (0, 2, 3, 4, 6, 8, 12)
+_SCHED_NAME = "Job scout"
+_SCHED_PROMPT = (
+    # This said "Do not send anything", which was never what the scheduled
+    # run does — it calls auto_cycle, and whether anything is sent depends on
+    # your auto-apply settings. A description that contradicts the behaviour
+    # is worse than none.
+    "Search for new roles matching my profile, score each honestly, "
+    "and draft applications for strong fits. Send only those that "
+    "clear every auto-apply gate — and nothing at all while rehearsal "
+    "is on.")
+
+
+def _job_schedules(memory) -> list:
     try:
-        return memory.get_schedule(int(sid)) is not None
+        return [s for s in memory.list_schedules()
+                if (s.get("action") or "") == "jobscout"]
     except Exception:
-        return False
+        return []
 
 
-def set_schedule(memory, scheduler, enabled: bool) -> bool:
-    cfg = load_config()
-    sid = cfg.get("schedule_id")
-    if enabled and not schedule_enabled(memory):
-        spec = scheduler.make_spec("daily", time_str="07:00", n=30)
-        nxt = scheduler.next_run(scheduler.parse_spec(spec))
-        new_sid = memory.create_schedule(
-            "Job scout — daily",
-            # This said "Do not send anything", which was never what the
-            # scheduled run does — it calls auto_cycle, and whether anything
-            # is sent depends on your auto-apply settings. A description that
-            # contradicts the behaviour is worse than none.
-            "Search for new roles matching my profile, score each honestly, "
-            "and draft applications for strong fits. Send only those that "
-            "clear every auto-apply gate — and nothing at all while rehearsal "
-            "is on.",
-            spec, "Auto", False, nxt, action="jobscout", payload="{}")
-        save_config({**cfg, "schedule_id": new_sid})
-        return True
-    if not enabled and sid:
+def _our_schedule(memory) -> dict | None:
+    """The cycle's schedule: the one recorded in config, else any jobscout
+    schedule there is (the autopilot button made its own and never recorded
+    it, so the Daily switch read off while one existed)."""
+    sid = load_config().get("schedule_id")
+    if sid:
         try:
-            memory.delete_schedule(int(sid))
+            s = memory.get_schedule(int(sid))
+            if s is not None:
+                return s
         except Exception:
             pass
-        cfg.pop("schedule_id", None)
+    js = _job_schedules(memory)
+    return js[0] if js else None
+
+
+def schedule_every_hours() -> int:
+    try:
+        n = int(load_config().get("every_hours") or 0)
+    except Exception:
+        n = 0
+    return n if n in EVERY_HOURS else 0
+
+
+def _spec_for(scheduler, every_hours: int) -> str:
+    if every_hours:
+        return scheduler.make_spec("minutes", n=every_hours * 60)
+    return scheduler.make_spec("daily", time_str="07:00")
+
+
+def schedule_enabled(memory) -> bool:
+    s = _our_schedule(memory)
+    return bool(s and s.get("enabled") and s.get("next_run") is not None)
+
+
+def schedule_info(memory) -> dict:
+    s = _our_schedule(memory)
+    n = schedule_every_hours()
+    return {"on": schedule_enabled(memory), "every_hours": n,
+            "says": (f"every {n} hours" if n else "daily at 07:00"),
+            "next_run": (s or {}).get("next_run"),
+            "last_run": (s or {}).get("last_run"),
+            "last_status": (s or {}).get("last_status") or "",
+            "last_summary": (s or {}).get("last_summary") or ""}
+
+
+def set_schedule(memory, scheduler, enabled: bool,
+                 every_hours: int | None = None) -> bool:
+    """Turn the scheduled cycle on or off, and set how often it runs.
+
+    There was one schedule-maker here and a second, in the autopilot button,
+    that wrote a schedule with no time and no next run: it was never due, so
+    "Set up the daily loop" set up nothing, and pressing it again cleared the
+    next run of a schedule that did work. Both go through here now, and an
+    existing schedule is adopted and repaired rather than duplicated."""
+    cfg = load_config()
+    if every_hours is not None:
+        every_hours = int(every_hours)
+        if every_hours not in EVERY_HOURS:
+            raise ValueError(f"every_hours must be one of {EVERY_HOURS}")
+        cfg["every_hours"] = every_hours
         save_config(cfg)
+    n = schedule_every_hours()
+    mine = _our_schedule(memory)
+    if enabled:
+        spec = _spec_for(scheduler, n)
+        if every_hours is not None or not mine or not mine.get("enabled") \
+                or mine.get("next_run") is None or mine.get("spec") != spec:
+            # a run every N hours starts within a few minutes of being
+            # switched on, not N hours later
+            nxt = (time.time() + 120 if n
+                   else scheduler.next_run(scheduler.parse_spec(spec)))
+        else:
+            nxt = mine["next_run"]
+        if mine:
+            memory.update_schedule(
+                mine["id"], name=_SCHED_NAME + (f" — every {n} hours" if n else " — daily"),
+                prompt=_SCHED_PROMPT, spec_json=spec, next_run=nxt)
+            sid = mine["id"]
+        else:
+            sid = memory.create_schedule(
+                _SCHED_NAME + (f" — every {n} hours" if n else " — daily"),
+                _SCHED_PROMPT, spec, "Auto", False, nxt,
+                action="jobscout", payload="{}")
+        # one cycle schedule; a second would run the cycle twice
+        for s in _job_schedules(memory):
+            if s["id"] != sid:
+                try:
+                    memory.delete_schedule(int(s["id"]))
+                except Exception:
+                    pass
+        cfg = load_config()
+        save_config({**cfg, "schedule_id": sid})
+        _audit("schedule", f"on, {'every %d hours' % n if n else 'daily at 07:00'}")
+        return schedule_enabled(memory)
+    for s in _job_schedules(memory):
+        try:
+            memory.delete_schedule(int(s["id"]))
+        except Exception:
+            pass
+    cfg = load_config()
+    cfg.pop("schedule_id", None)
+    save_config(cfg)
     return schedule_enabled(memory)
+
+
+def repair_schedule(memory, scheduler) -> bool:
+    """At start: an enabled cycle schedule that can never come due (no next
+    run, or the autopilot's empty spec) is given its proper spec and time.
+    True when one was repaired."""
+    s = _our_schedule(memory)
+    if not s or not s.get("enabled"):
+        return False
+    try:
+        scheduler.parse_spec(s.get("spec") or "{}")
+        ok_spec = True
+    except Exception:
+        ok_spec = False
+    if ok_spec and s.get("next_run") is not None:
+        return False
+    set_schedule(memory, scheduler, True)
+    return True
 
 
 def _audit(name: str, summary_text: str) -> None:

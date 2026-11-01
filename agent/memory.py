@@ -970,6 +970,17 @@ class MemoryStore:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def update_schedule(self, sched_id: int, *, name: str, prompt: str,
+                        spec_json: str, next_run: float | None,
+                        enabled: bool = True) -> bool:
+        cur = self.conn.execute(
+            "UPDATE schedules SET name = ?, prompt = ?, spec = ?, enabled = ?, "
+            "next_run = ? WHERE id = ?",
+            (name.strip(), prompt.strip(), spec_json, int(bool(enabled)),
+             next_run, sched_id))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def delete_schedule(self, sched_id: int) -> bool:
         cur = self.conn.execute("DELETE FROM schedules WHERE id = ?", (sched_id,))
         self.conn.commit()
