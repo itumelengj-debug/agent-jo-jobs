@@ -43,6 +43,21 @@ def build_id() -> str:
     return m.group(1) if m else ""
 
 
+# Scripts you run on macOS or Linux. A zip entry carries no permissions unless
+# it's given them, so ./install.sh and a double-clicked start.command both
+# failed with "Permission denied" after unzipping a release.
+RUNNABLE = (".sh", ".command")
+
+
+def _entry(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=datetime.now().timetuple()[:6])
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3            # unix, so the mode below is honoured
+    mode = 0o755 if name.endswith(RUNNABLE) else 0o644
+    info.external_attr = (0o100000 | mode) << 16
+    return info
+
+
 def collect() -> list:
     out = []
     for p in sorted(ROOT.rglob("*")):
@@ -106,9 +121,9 @@ def main(argv=None) -> int:
                     z.close(); zp.unlink()
                     print(f"BUILD FAILED: {r} contains {what}.")
                     return 1
-            z.writestr(str(r).replace("\\", "/"), data)
+            z.writestr(_entry(str(r).replace("\\", "/")), data)
         for n, b in signed.items():
-            z.writestr(n, b)
+            z.writestr(_entry(n), b)
     print(f"Packaged {len(files)} files -> {zp.name}")
     if not signed:
         print("NOT signed (no signing-key.private): the in-app updater will refuse "

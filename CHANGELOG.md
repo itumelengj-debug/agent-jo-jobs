@@ -1070,3 +1070,19 @@ whole advert.
   the requirements in 27 of 28 scorings.
 - Checks: 8 new `adverts.*` (806 pass); the window suite and the layout
   and navigator checks pass.
+
+### 39. The release runs on a Mac or Linux after unzipping
+
+Found by installing the release zip from scratch, the way the README says:
+`./install.sh` failed with "Permission denied". The zip wrote every file
+with no permissions, and git held the scripts as ordinary files, so on macOS
+and Linux neither `install.sh`/`start.sh` nor a double-clicked
+`install.command`/`start.command` would run. Windows was unaffected. The
+scripts are executable in git now, and `tools/make_release.py` writes them
+into the zip as runnable (755) and everything else as 644.
+
+From the fresh zip, `./install.sh` built its environment, installed the
+packages and checked the app loads. `./start.sh` served the window in a
+second, with this release's defaults (25 a day, ghost and scam screening,
+a CV on every email, follow-ups, adverts read in full). Build stamp
+2026-11-02.
