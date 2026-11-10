@@ -297,8 +297,12 @@ def build_campaign(subject_tmpl: str, body_tmpl: str, contacts: list) -> list:
 # --------------------------------------------------------------------------- #
 #  send
 # --------------------------------------------------------------------------- #
+MAX_ATTACH_BYTES = 10 * 1024 * 1024     # most mail servers refuse much more
+
+
 def send(to: str, subject: str, body: str, *, html: str | None = None,
-         dry_run: bool = False, autonomous: bool = False) -> dict:
+         dry_run: bool = False, autonomous: bool = False,
+         attachments: list | None = None) -> dict:
     """Send a single email through the configured account. Returns a result dict;
     never raises for the common refusals (returns ok=False with a reason).
 
@@ -338,12 +342,30 @@ def send(to: str, subject: str, body: str, *, html: str | None = None,
     msg.set_content(full_body)
     if html:
         msg.add_alternative(html, subtype="html")
+    # files to send with it (a CV, for an application). One that's missing
+    # or too big is refused before anything goes, with the reason, rather
+    # than the message arriving without what it says is attached.
+    attached = []
+    for a in attachments or []:
+        import mimetypes
+        from pathlib import Path as _P
+        fp = _P(str(a))
+        if not fp.is_file():
+            return {"ok": False, "to": to, "error": f"the attachment {fp.name} isn't there any more"}
+        if fp.stat().st_size > MAX_ATTACH_BYTES:
+            return {"ok": False, "to": to,
+                    "error": f"the attachment {fp.name} is over {MAX_ATTACH_BYTES // 1048576} MB"}
+        ctype = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+        msg.add_attachment(fp.read_bytes(), maintype=maintype, subtype=subtype,
+                           filename=fp.name)
+        attached.append(fp.name)
 
     if dry_run:
-        _audit({"to": to, "subject": msg["Subject"],
+        _audit({"to": to, "subject": msg["Subject"], "attached": attached,
                 "status": "draft_only" if draft_only else "dry_run", "auto": autonomous})
         return {"ok": True, "to": to, "subject": msg["Subject"], "dry_run": True,
-                "draft_only": draft_only}
+                "draft_only": draft_only, "attached": attached}
 
     ok, why = _rate_check()
     if not ok:
@@ -358,8 +380,10 @@ def send(to: str, subject: str, body: str, *, html: str | None = None,
         return {"ok": False, "to": to, "error": f"send failed: {type(exc).__name__}: {exc}"}
 
     _rate_record()
-    _audit({"to": to, "subject": msg["Subject"], "status": "sent", "auto": autonomous})
-    return {"ok": True, "to": to, "subject": msg["Subject"], "dry_run": False}
+    _audit({"to": to, "subject": msg["Subject"], "status": "sent", "auto": autonomous,
+            "attached": attached})
+    return {"ok": True, "to": to, "subject": msg["Subject"], "dry_run": False,
+            "attached": attached}
 
 
 def send_campaign(drafts: list, *, dry_run: bool = False, limit: int | None = None) -> dict:

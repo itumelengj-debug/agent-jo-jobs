@@ -69,6 +69,29 @@
         <div class="syn-mark" aria-hidden="true"><img src="/static/icons/icon-192.png?v=green1" alt="" width="64" height="64" /></div>
       </header>
 
+      <article class="card ap-card" id="apCard">
+        <div class="ap-head">
+          <span class="ap-dot" id="apDot"></span>
+          <h3 id="apSays">Autopilot</h3>
+          <button class="btn ghost" id="apToggle" hidden></button>
+        </div>
+        <p class="muted" id="apWhen"></p>
+        <div class="ap-nums" id="apNums"></div>
+        <div id="apNeeds"></div>
+        <div id="apSetup" hidden>
+          <p>Give it your CV and it does the rest: builds your profile, works out which
+            jobs to look for, finds boards that suit you, and starts looking. Nothing is
+            sent until you say so.</p>
+          <textarea id="apCv" class="input" rows="5" placeholder="Paste your CV here, or choose a file below"></textarea>
+          <div class="actions">
+            <input type="file" id="apFile" accept=".pdf,.docx,.doc,.txt,.md" />
+            <button class="btn primary" id="apGo">Start Autopilot</button>
+          </div>
+        </div>
+        <div id="apSteps"></div>
+        <label class="toggle" id="apBootRow" hidden><input type="checkbox" id="apBoot" /><span>Start with this computer, quietly, so it runs without the window open</span></label>
+      </article>
+
       <div id="onboard"></div>
 
       <div class="bar" id="ovActions">
@@ -197,6 +220,12 @@
             <label class="toggle"><input type="checkbox" id="aOn" /><span>Auto-apply on</span></label>
             <label class="toggle"><input type="checkbox" id="aDry" /><span>Rehearsal — draft but never send</span></label>
             <label class="toggle"><input type="checkbox" id="aClean" /><span>Only send drafts that pass the claims check</span></label>
+            <label class="toggle"><input type="checkbox" id="aGhosts" /><span>Skip likely ghost jobs (scams are always skipped)</span></label>
+            <label class="toggle"><input type="checkbox" id="aAttach" /><span>Attach a CV to every emailed application</span></label>
+            <label class="toggle"><input type="checkbox" id="aTailor" /><span>Tailor the CV to each advert (checked like the letters)</span></label>
+            <label class="toggle"><input type="checkbox" id="aRead" /><span>Read the full advert when a board shows only a title</span></label>
+            <label class="toggle"><input type="checkbox" id="aFollow" /><span>Follow up once on emailed applications with no reply</span></label>
+            <div class="field"><label>Follow up after (days)</label><input id="aFollowDays" class="input" type="number" min="2" max="30" /></div>
             <div class="field"><label>Adverts with no email address — most of them</label>
               <select id="aPortal" class="select">
                 <option value="prepare">Fill the form and answer what it can — you finish it</option>
@@ -204,7 +233,10 @@
                 <option value="off">Skip them</option>
               </select></div>
             <div class="field"><label>Minimum fit</label><input id="aMin" class="input" type="number" min="0" max="100" /></div>
-            <div class="field"><label>Most per day</label><input id="aCap" class="input" type="number" min="0" max="50" /></div>
+            <div class="field"><label>Most per day</label><input id="aCap" class="input" type="number" min="0" max="200" /></div>
+            <div class="field"><label>Company forms per run</label><input id="aForms" class="input" type="number" min="0" max="100" /></div>
+            <div class="field"><label>New roles taken on per run</label><input id="aFind" class="input" type="number" min="1" max="1000" /></div>
+            <div class="field"><label>Engine calls at once (1 for a slow local model)</label><input id="aWorkers" class="input" type="number" min="1" max="8" /></div>
             <div class="field"><label>Signature</label><textarea id="aSig" class="input" rows="3"></textarea></div>
             <button class="btn primary wide" id="aSave">Save rules</button>
           </div>
@@ -216,7 +248,18 @@
             <button class="btn" id="aRun">Run once now</button>
             <button class="btn ghost" id="aPilot">Set up the daily loop</button>
           </div>
-          <label class="toggle" style="margin-top:14px"><input type="checkbox" id="aDaily" /><span>Daily scan at 07:00 — finds, scores, drafts</span></label>
+          <label class="toggle" style="margin-top:14px"><input type="checkbox" id="aDaily" /><span>Scheduled run — finds, scores, drafts, and applies within your rules</span></label>
+          <div class="field"><label>How often</label>
+            <select id="aEvery" class="select">
+              <option value="0">Once a day, at 07:00</option>
+              <option value="12">Every 12 hours</option>
+              <option value="8">Every 8 hours</option>
+              <option value="6">Every 6 hours</option>
+              <option value="4">Every 4 hours</option>
+              <option value="3">Every 3 hours</option>
+              <option value="2">Every 2 hours</option>
+            </select></div>
+          <p class="muted" id="aSchedNote"></p>
         </article>
       </div>
       <div class="grid-2">
@@ -316,6 +359,16 @@
           provider — a key and a base URL — or point at a model on this machine,
           which costs nothing and sends nothing out.</p>
       </header>
+
+      <article class="card" id="licCard">
+        <h3>Licence</h3>
+        <p id="licSays" class="muted"></p>
+        <div class="actions" id="licForm">
+          <input id="licKey" class="input" placeholder="Paste your licence key (starts AJJ1.)" />
+          <button class="btn primary" id="licSave">Activate</button>
+          <button class="btn ghost" id="licRemove" hidden>Remove key</button>
+        </div>
+      </article>
 
       <article class="card">
         <h3>Add an engine</h3>

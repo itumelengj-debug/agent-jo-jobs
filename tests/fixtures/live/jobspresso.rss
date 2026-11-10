@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	xmlns:job_listing="https://jobspresso.co"
+>
+
+<channel>
+	<title>Jobs Archive | Jobspresso</title>
+	<atom:link href="https://jobspresso.co/?feed=job_feed" rel="self" type="application/rss+xml" />
+	<link>https://jobspresso.co</link>
+	<description>Jobspresso is the easiest way to find remote jobs and careers at interesting and innovative companies.</description>
+	<lastBuildDate>Tue, 10 Nov 2026 15:53:16 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=7.1.4</generator>
+
+<image>
+	<url>https://jobspresso.co/wp-content/uploads/cropped-social-square-1080-32x32.png</url>
+	<title>Jobs Archive | Jobspresso</title>
+	<link>https://jobspresso.co</link>
+	<width>32</width>
+	<height>32</height>
+</image> 
+<site xmlns="com-wordpress:feed-additions:1">88453655</site>	<item>
+		<title>Lead Compensation Analyst</title>
+		<link>https://jobspresso.co/job/lead-compensation-analyst/</link>
+		
+		<dc:creator><![CDATA[Lyra Health<br>⚲&nbsp;United States]]></dc:creator>
+		<pubDate>Tue, 10 Nov 2026 15:53:16 +0000</pubDate>
+				<guid isPermaLink="false">https://jobspresso.co/?post_type=job_listing&#038;p=165544</guid>
+
+					<description><![CDATA[About Lyra Health Lyra Health is a leading provider of evidence-based mental health care, serving more than 20 million people globally in partnership with employers and more than 100 million through health plan and partner relationships. The company has delivered more than 15 million sessions of mental health care, published more than 35 peer-reviewed studies,]]></description>
+										<content:encoded><![CDATA[<p><strong>About Lyra Health</strong></p>
+<p>Lyra Health is a leading provider of evidence-based mental health care, serving more than 20 million people globally in partnership with employers and more than 100 million through health plan and partner relationships. The company has delivered more than 15 million sessions of mental health care, published more than 35 peer-reviewed studies, and delivered unmatched outcomes in terms of access, clinical effectiveness, and cost efficiency. Extensive peer-reviewed research confirms Lyra&#8217;s transformative care model helps people recover twice as fast and results in a 26% annual reduction in overall healthcare claims costs. Lyra is transforming access to life-changing mental health care through Lyra Empower, the only fully integrated, AI-powered platform combining the highest-quality care and technology solutions.</p>
+<p><strong>About the Rol]]></content:encoded>
+					
+		
+		
+		<post-id xmlns="com-wordpress:feed-additions:1">165544</post-id><media:content xmlns:media="http://search.yahoo.com/mrss/" medium="image" type="image/jpeg" url="https://jobspresso.co/wp-content/uploads/lyra-health-400-150x150.jpg" width="70" height="70" /><job_listing:location><![CDATA[United States]]></job_listing:location>
+<job_listing:job_type><![CDATA[HR]]></job_listing:job_type>
+<job_listing:job_category><![CDATA[Full Time]]></job_listing:job_category>
+<job_listing:company><![CDATA[Lyra Health]]></job_listing:company>
+<job_listing:salary><![CDATA[US$106k–US$146k]]></job_listing:salary>
+	</item>
+<item>
+		<title>Senior Strategic Finance Manager, Corporate Finance</title>
+		<link>https://jobspresso.co/job/senior-strategic-finance-manager-corporate-finance/</link>
+		
+		<dc:creator><![CDATA[Netlify<br>⚲&nbsp;United States, Canada]]></dc:creator>
+		<pubDate>Tue, 10 Nov 2026 15:44:56 +0000</pubDate>
+				<guid isPermaLink="false">https://jobspresso.co/?post_type=job_listing&#038;p=165543</guid>
+
+					<description><![CDATA[About the Team Netlify&#8217;s Finance team builds the financial foundation that helps the company plan, operate, and make informed decisions. The team owns our operating model, management reporting, budgeting and planning, and the company-level metrics leadership uses to understand performance and make tradeoffs. As Senior Finance Manager, you&#8217;ll own the corporate finance cycle and decide]]></description>
+										<content:encoded><![CDATA[<p style="font-size: 1.125em;"><strong>About the Team</strong></p>
+<p>Netlify&#8217;s Finance team builds the financial foundation that helps the company plan, operate, and make informed decisions. The team owns our operating model, management reporting, budgeting and planning, and the company-level metrics leadership uses to understand performance and make tradeoffs.</p>
+<p>As Senior Finance Manager, you&#8217;ll own the corporate finance cycle and decide what it should become. That covers monthly reporting, the driver-based forecast, annual planning, scenario work, and the KPI layer, and it extends past running them well into bringing your experience to improve and innovate on our processes. This is a hands-on role with real latitude: you will work directly with senior leadership on capital, pricing, and headcount decisions, and will leverage AI to build better tooling and make Finance]]></content:encoded>
+					
+		
+		
+		<post-id xmlns="com-wordpress:feed-additions:1">165543</post-id><media:content xmlns:media="http://search.yahoo.com/mrss/" medium="image" type="image/jpeg" url="https://jobspresso.co/wp-content/uploads/netlify-400-150x150.png" width="70" height="70" /><job_listing:location><![CDATA[United States, Canada]]></job_listing:location>
+<job_listing:job_type><![CDATA[Finance]]></job_listing:job_type>
+<job_listing:job_category><![CDATA[Full Time]]></job_listing:job_category>
+<job_listing:company><![CDATA[Netlify]]></job_listing:company>
+<job_listing:salary><![CDATA[US$150k–US$208k]]></job_listing:salary>
+	</item>
+<item>
+		<title>Talent Partner</title>
+		<link>https://jobspresso.co/job/talent-partner/</link>
+		
+		<dc:creator><![CDATA[Netlify<br>⚲&nbsp;United States, Canada]]></dc:creator>
+		<pubDate>Tue, 10 Nov 2026 15:35:18 +0000</pubDate>
+				<guid isPermaLink="false">https://jobspresso.co/?post_type=job_listing&#038;p=165541</guid>
+
+					<description><![CDATA[About the Team At Netlify, we&#8217;re a remote-first, globally distributed company with 120+ employees working across 13 countries around the world. Together, we&#8217;re building the platform for building and shipping web apps, with a mission to help anyone bring their ideas to the web. As a Talent Partner, you&#8217;ll play a key role in bringing]]></description>
+										<content:encoded><![CDATA[<p style="font-size: 1.125em;"><strong>About the Team</strong></p>
+<p>At Netlify, we&#8217;re a remote-first, globally distributed company with 120+ employees working across 13 countries around the world. Together, we&#8217;re building the platform for building and shipping web apps, with a mission to help anyone bring their ideas to the web.</p>
+<p>As a Talent Partner, you&#8217;ll play a key role in bringing in the people who will shape Netlify&#8217;s next stage of growth. You&#8217;ll partner closely with hiring leaders to help them make thoughtful, high-quality hiring decisions and will be deeply embedded in understanding this evolving job market and what makes not only great talent, but folks who align with Netlify&#8217;s mission. With our team, you&#8217;ll recruit across a wide variety of teams and talent markets, owning the full recruiting lifecycle and partnering closely with ]]></content:encoded>
+					
+		
+		
+		<post-id xmlns="com-wordpress:feed-additions:1">165541</post-id><media:content xmlns:media="http://search.yahoo.com/mrss/" medium="image" type="image/jpeg" url="https://jobspresso.co/wp-content/uploads/netlify-400-150x150.png" width="70" height="70" /><job_listing:location><![CDATA[United States, Canada]]></job_listing:location>
+<job_listing:job_type><![CDATA[HR]]></job_listing:job_type>
+<job_listing:job_category><![CDATA[Full Time]]></job_listing:job_category>
+<job_listing:company><![CDATA[Netlify]]></job_listing:company>
+<job_listing:salary><![CDATA[US$97k–US$150k]]></job_listing:salary>
+	</item>
+</channel></rss>

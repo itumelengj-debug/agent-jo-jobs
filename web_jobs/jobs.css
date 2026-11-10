@@ -1412,12 +1412,30 @@ details.trail > summary {
   #ovActions .muted { flex-basis: 100%; white-space: normal; }
 }
 
+/* --- Autopilot: the one answer, first ----------------------------------- */
+.ap-card { margin-bottom: 18px; }
+.ap-head { display: flex; align-items: center; gap: 10px; }
+.ap-head h3 { margin: 0; flex: 1; }
+.ap-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.ap-dot.on { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+.ap-dot.warn { background: #e0a43a; box-shadow: 0 0 0 4px color-mix(in srgb, #e0a43a 22%, transparent); }
+.ap-nums { display: flex; flex-wrap: wrap; gap: 22px; margin: 12px 0 4px; }
+.ap-num b { display: block; font-size: 26px; line-height: 1.1; font-weight: 600; }
+.ap-num span { color: var(--ink-3); font-size: 12.5px; }
+.ap-need { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); }
+.ap-need b { flex: none; }
+.ap-step { padding: 3px 0; font-size: 14px; }
+.ap-step.bad { color: #e0a43a; }
+#apSetup textarea { width: 100%; margin: 8px 0; }
+
 /* ======================================================================= */
 /*  SYMBOLIC SYNAPSE, IN JOBS GREEN — the look of symbolicsynapse.co.za     */
 /*  (and of Agent Jo), with Jobs' own mint where the site has cyan, so the  */
 /*  two apps are one family and still easy to tell apart. The abyss ground */
 /*  and its grain, Archivo / IBM Plex, pill buttons, frosted cards, and the */
 /*  lattice on the overview with the green Jobs logo at its heart.         */
+
+
 /*  Scoped to html[data-skin="synapse"] (set in index.html). It changes    */
 /*  colour, type and texture; layout stays with the rules above, so the    */
 /*  narrow-window fixes still apply.                                        */
@@ -1781,6 +1799,5 @@ html[data-skin="synapse"] .step::before {
   html[data-skin="synapse"] .role-card:hover::before,
   html[data-skin="synapse"] .step:hover::before { opacity: 1; }
 }
-
 
 [hidden] { display: none !important; }

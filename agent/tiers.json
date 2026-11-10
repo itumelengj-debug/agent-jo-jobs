@@ -1,0 +1,19 @@
+{
+  "_about": "What each licence tier allows. Edit the numbers and lists; the app reads this file at start. A limit that is missing or null means unlimited. These apply only once licence-key.pub exists in the app folder (python tools/make_licence.py --make-key): until then every copy is fully unlocked.",
+  "free": {
+    "label": "Free",
+    "daily_cap": 5,
+    "run_every_hours": [0],
+    "submit_forms": false,
+    "follow_ups": false,
+    "tailored_cv": false
+  },
+  "pro": {
+    "label": "Pro",
+    "daily_cap": null,
+    "run_every_hours": null,
+    "submit_forms": true,
+    "follow_ups": true,
+    "tailored_cv": true
+  }
+}

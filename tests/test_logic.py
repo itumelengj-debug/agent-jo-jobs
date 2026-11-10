@@ -292,8 +292,41 @@ def main() -> None:
         check("jobs.ignores_noreply_and_board_addresses",
               _jb._apply_email("write to no-reply@x.com") == ""
               and _jb._apply_email("via jobs@remoteok.com") == ""
-              and _jb._apply_email("noreply@x.com or hr@real.co")
+              and _jb._apply_email("noreply@x.com, or send your CV to hr@real.co")
               == "hr@real.co")
+        # Found against live boards: the first address in an advert is usually
+        # the small print. Each of these is a real sentence from one.
+        check("jobs.small_print_addresses_are_not_where_you_apply",
+              not any(_jb._apply_email(t) for t in (
+                  "Mitratech will work with applicants requesting accommodation at any "
+                  "stage of the hiring process. Please email recruiting@mitratech.com",
+                  "If you believe you need a reasonable accommodation in order to search "
+                  "for a job opening or to submit an application, please email us at "
+                  "humanresources@lendingtree.com",
+                  "If you've received a message claiming to be Deepgram, please forward "
+                  "it to careers@deepgram.com",
+                  "request a human review of any automated decision. To exercise these "
+                  "rights, please contact recruitment@hopper.com",
+                  "Suspicious messages can be reported to security@linear.app",
+                  "Have any questions? Contact us at jobposting@welocalize.com",
+                  "Our DPO can be reached at dpo@corp.com",
+                  "a bare address proves nothing: hr@real.co")))
+        check("jobs.an_address_the_advert_asks_for_applications_at_is_used",
+              _jb._apply_email("Immediate start. Apply: email careers@polymath.example.org")
+              == "careers@polymath.example.org"
+              and _jb._apply_email("To apply, email support@bcdr.test with your resume")
+              == "support@bcdr.test"
+              and _jb._apply_email("Please send your CV and a short cover letter to "
+                                   "thabo.nkosi@firm.co.za by Friday.") == "thabo.nkosi@firm.co.za"
+              and _jb._apply_email("Interested? Reach out to me directly: founder@startup.io")
+              == "founder@startup.io"
+              and _jb._apply_email("Stack: Rails, Python. Email careers@buildq.ai")
+              == "careers@buildq.ai"
+              and _jb._apply_email("For accommodations email accessibility@corp.com. To apply "
+                                   "send your resume to talent@corp.com") == "talent@corp.com"
+              and _jb._apply_email(_jb._strip_html(
+                  '<p>To apply:</p><a href="mailto:hello@acme.io?subject=Job">click here</a>'))
+              == "hello@acme.io")
 
         # --- auto-apply: fully automated, but only through the gates ----
         import agent.outreach as _jbout
@@ -376,6 +409,9 @@ def main() -> None:
              "candidate_required_location": "Berlin, Germany",
              "description": "Must be in office."}]})
         _jb.JOB_FETCHER = lambda u: _JBFEED if "remotive" in u else "[]"
+        # a remote board's "Berlin, Germany" is a remote role for people in
+        # Germany; it is dropped for someone who has said they live elsewhere
+        _jb.save_profile({**_jb.profile(), "location": "Johannesburg, South Africa"})
         _jb.save_job_sources([
             {"name": "Remotive", "kind": "remotive", "on": True,
              "url": "https://remotive.com/api/remote-jobs"},
@@ -1854,7 +1890,7 @@ def main() -> None:
     for _i, (_ln, _name) in enumerate(_1ffns):
         _end = _1ffns[_i + 1][0] if _i + 1 < len(_1ffns) else len(_1flines)
         _body = "\n".join(_1flines[_ln - 1:_end - 1])
-        if "for src in job_sources():" in _body and "_PARSERS" in _body:
+        if "for src in job_sources():" in _body and ("_PARSERS" in _body or "read_source(" in _body):
             _1floops.append(_name)
     check("sources.only_one_function_fetches_them", _1floops == ["_fetch_all"],
           f"{_1floops}")
@@ -3110,6 +3146,591 @@ def _auto_apply_checks() -> None:
                   not J.draft_application(k3, Empty())["ok"]
                   and J.get_role(k3)["stage"] == "found")
         section("auto.engine", engine)
+
+        # --- volume: repair, parallel, and the limits are yours ------------- #
+        def volume():
+            fresh()
+            # a first draft with a word the profile can't source is redrafted
+            # once, told which; the clean second draft is the one that goes
+            asks = []
+
+            class Repairs:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    asks.append(sysx)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90, "verdict": "strong"}))
+                    told = "CAN'T SUPPORT" in sysx and "Kubernetes" in sysx
+                    body = GOOD + ("" if told else " I also run Kubernetes clusters.")
+                    return blk(json.dumps({"subject": "S", "body": body}))
+            k = role("Repairable", email="r@r.test")
+            J.save_auto_config({"min_quality": 0})
+            out = J.auto_apply(Repairs())
+            r = J.get_role(k)
+            check("volume.a_held_claim_is_redrafted_once_and_sent",
+                  r["stage"] == "applied" and "Kubernetes" not in r["draft"]["body"]
+                  and r["redrafted_for_claims"]["before"] >= 1 and r["redrafted_for_claims"]["after"] == 0
+                  and sends and sends[-1][0] == "r@r.test",
+                  f"{out.get('held')} {r.get('redrafted_for_claims')}")
+
+            class Stubborn:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    return blk(json.dumps({"subject": "S",
+                                           "body": GOOD + " I run Kubernetes."}))
+            fresh()
+            k = role("Stubborn", email="s@s.test")
+            J.save_auto_config({"min_quality": 0})
+            out = J.auto_apply(Stubborn())
+            check("volume.a_draft_still_unsourced_after_repair_is_held",
+                  J.get_role(k)["stage"] == "drafted" and not sends
+                  and any("claim" in h["reason"] for h in out["held"]))
+
+            # several roles at once, and every one of them done
+            fresh(engine_workers=4, daily_cap=50, settled=True)
+            import threading as _th
+            live, peak = [0], [0]
+            lock = _th.Lock()
+
+            class Slow:
+                def chat(self, m, s, t=None, **kw):
+                    with lock:
+                        live[0] += 1
+                        peak[0] = max(peak[0], live[0])
+                    _axtime.sleep(0.05)
+                    with lock:
+                        live[0] -= 1
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    return blk(json.dumps({"subject": "S", "body": GOOD}))
+            J.save_auto_config({"min_quality": 0})
+            for i in range(12):
+                role(f"Parallel {i}", email=f"p{i}@p.test")
+            out = J.auto_apply(Slow())
+            check("volume.roles_are_scored_and_drafted_side_by_side",
+                  peak[0] > 1 and peak[0] <= 4 and len(out["sent"]) == 12
+                  and not out["errors"], f"peak={peak[0]} sent={len(out['sent'])} {out['errors'][:2]}")
+
+            # discovery's room is a setting, and roles it already has don't use it
+            fresh(discover_per_run=3)
+            J.save_job_sources([{"name": "V", "kind": "remotive",
+                                 "url": "https://v.test/api", "on": True}])
+            feed = json.dumps({"jobs": [
+                {"title": f"Python Developer {i}", "company_name": f"V{i}",
+                 "url": f"https://v.test/{i}", "candidate_required_location": "Worldwide",
+                 "description": "Python SQL"} for i in range(7)]})
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: feed if "/api" in url else "<html><body></body></html>"
+            try:
+                J.save_search_config({"queries": ["python"]})
+                a = J.discover()["added"]
+                b = J.discover()["added"]
+                c = J.discover()["added"]
+            finally:
+                J.JOB_FETCHER = was
+            check("volume.new_roles_per_run_is_a_setting_and_known_ones_dont_use_it",
+                  (a, b, c) == (3, 3, 1), f"{(a, b, c)}")
+            check("volume.the_limits_have_ceilings",
+                  J.LIMITS["daily_cap"] >= 100 and J.LIMITS["engine_workers"] == J.ENGINE_WORKERS_MAX)
+        section("auto.volume", volume)
+
+        # --- the scheduled run: it is due, and as often as you say ---------- #
+        def schedule():
+            import agent.scheduler as _sch
+            fresh()
+            m = _RMS(db_path=_axc.AGENT_HOME / "sched.db", check_same_thread=False)
+            # the old autopilot button's schedule: no spec, no next run
+            m.create_schedule(name="Job scout — daily", prompt="find and apply",
+                              spec_json="{}", action="jobscout", payload="{}")
+            check("schedule.a_schedule_with_no_next_run_is_repaired",
+                  J.repair_schedule(m, _sch)
+                  and m.due_schedules(_axtime.time() + 2 * 86400)
+                  and J.schedule_enabled(m))
+            J.set_schedule(m, _sch, True)
+            check("schedule.switching_on_twice_keeps_one_schedule",
+                  len([x for x in m.list_schedules() if x["action"] == "jobscout"]) == 1)
+            J.set_schedule(m, _sch, True, every_hours=4)
+            row = m.list_schedules()[0]
+            check("schedule.every_n_hours_starts_soon_and_repeats",
+                  json.loads(row["spec"]) == {"kind": "minutes", "n": 240}
+                  and row["next_run"] - _axtime.time() < 300
+                  and J.schedule_info(m)["says"] == "every 4 hours")
+            try:
+                J.set_schedule(m, _sch, True, every_hours=5)
+                bad = False
+            except ValueError:
+                bad = True
+            check("schedule.only_the_offered_intervals", bad)
+            J.set_schedule(m, _sch, False)
+            check("schedule.off_means_no_schedule_at_all",
+                  not J.schedule_enabled(m)
+                  and not [x for x in m.list_schedules() if x["action"] == "jobscout"])
+            check("schedule.the_autopilot_uses_the_same_schedule_maker",
+                  "jobscout.set_schedule(mem, scheduler, True)" in
+                  (ROOT / "jobs" / "server.py").read_text("utf-8")
+                  and 'spec_json="{}"' not in (ROOT / "jobs" / "server.py").read_text("utf-8"))
+        section("auto.schedule", schedule)
+
+        # --- ghost jobs, scams, and a CV with every application ------------ #
+        def trusted():
+            import agent.trust as T
+            scam = {"title": "Data Entry", "company": "Fast Cash",
+                    "summary": "Earn $900 per week from home! Pay a registration fee of $50 "
+                               "to start. Interview via Telegram.",
+                    "apply_email": "fastcash1@gmail.com"}
+            pay = {"title": "Payments Engineer", "company": "Paylo",
+                   "summary": "Build our fee engine and bank integrations; card payments and "
+                              "application fees for merchants. $150k-$180k per year."}
+            ghost = {"title": "Data Engineer", "company": "Big Co",
+                     "summary": "Join our talent community for future opportunities.",
+                     "posted_at": "2020-01-01"}
+            check("trust.a_fee_and_a_telegram_interview_is_a_scam",
+                  T.assess(scam)["verdict"] == "scam")
+            check("trust.an_advert_about_fees_is_not_a_scam",
+                  T.assess(pay)["verdict"] == "ok"
+                  and T.assess(pay)["salary"] == "$150k-$180k per year")
+            check("trust.a_talent_pool_left_up_for_years_is_a_ghost",
+                  T.assess(ghost)["verdict"] == "likely_ghost")
+            check("trust.salaries_are_read_and_years_are_not",
+                  T.salary("R45,000 pm") == "R45,000 pm" and T.salary("in 2026, 5 years") == ""
+                  and T.salary("€60.000 - €70.000") == "€60.000 - €70.000")
+            check("trust.posting_dates_are_read_however_boards_send_them",
+                  J._posted("2026-10-30T10:00:00Z") == "2026-10-30"
+                  and J._posted(1761818400000) == J._posted(1761818400)
+                  and J._posted("Thu, 30 Oct 2026 10:00:00 GMT") == "2026-10-30"
+                  and J._posted("Posted 30+ Days Ago") != ""
+                  and J._posted("") == "")
+            check("trust.a_role_is_as_old_as_its_advert",
+                  J.days_listed({"posted_at": "2020-01-01", "found_at": J._iso()}) > 1000
+                  and J.days_listed({"found_at": "2020-01-01 00:00 UTC"}) > 1000)
+
+            # in a cycle: set aside before anything is spent on it
+            fresh(settled=True)
+            J.save_job_sources([{"name": "T", "kind": "remotive", "url": "https://t.test/api", "on": True}])
+            feed = json.dumps({"jobs": [
+                {"title": "Python Developer", "company_name": "Fast Cash", "url": "https://t.test/1",
+                 "candidate_required_location": "Worldwide",
+                 "description": "Python SQL. Pay a registration fee of $50 to start. Interview via Telegram."},
+                {"title": "Python Developer", "company_name": "Pool Co", "url": "https://t.test/2",
+                 "candidate_required_location": "Worldwide", "publication_date": "2020-01-01T00:00:00",
+                 "description": "Python SQL. Join our talent pool for future opportunities."},
+                {"title": "Python Developer", "company_name": "Real Co", "url": "https://t.test/3",
+                 "candidate_required_location": "Worldwide",
+                 "description": "Python SQL Power BI. Apply to jobs@real.test"}]})
+            asked = []
+
+            class Eng:
+                def chat(self, m, s, t=None, **kw):
+                    sysx = " ".join(s) if isinstance(s, list) else str(s)
+                    asked.append(m[0]["content"][:400])
+                    if "assess how well" in sysx:
+                        return blk(json.dumps({"score": 90}))
+                    if "prepare a CV" in sysx:
+                        return blk(json.dumps({"headline": "BI lead", "summary": "Tech lead on an FX desk.",
+                                               "key_skills": ["Python", "SQL"],
+                                               "experience": [{"role": "Tech lead", "employer": "Standard Bank",
+                                                               "bullets": ["Built a Medallion pipeline"]}]}))
+                    return blk(json.dumps({"subject": "S", "body": GOOD}))
+            was, was_send = J.JOB_FETCHER, O.send
+            got = []
+            O.send = lambda to, s_, b, **kw: (got.append((to, kw.get("attachments"))) or {"ok": True})
+            J.JOB_FETCHER = lambda url: feed if "/api" in url else "<html><body></body></html>"
+            made = {}
+            import agent.resume as _R
+            was_make = _R.make
+
+            def fake_make(role, prof, fmt="pdf", **kw):
+                f = _axc.AGENT_HOME / f"cv-{(role or {}).get('company', 'base')}.{fmt}"
+                f.write_text("cv")
+                made[f.name] = bool(role)
+                return {"ok": True, "path": str(f), "filename": f.name}
+            _R.make = fake_make
+            try:
+                J.save_search_config({"queries": ["python"]})
+                J.save_auto_config({"min_quality": 0, "portal_mode": "off"})
+                out = J.auto_cycle(Eng())
+            finally:
+                J.JOB_FETCHER, O.send, _R.make = was, was_send, was_make
+            st = {r["company"]: r for r in J.roles()}
+            check("trust.scams_and_ghosts_are_set_aside_before_the_engine",
+                  st["Fast Cash"]["stage"] == "closed" and "scam" in st["Fast Cash"]["closed_reason"]
+                  and st["Pool Co"]["stage"] == "closed" and "ghost" in st["Pool Co"]["closed_reason"]
+                  and not any("Fast Cash" in a or "Pool Co" in a for a in asked)
+                  and out.get("scams_skipped") == 1 and out.get("ghosts_skipped") == 1,
+                  f"{out.get('summary')}")
+            check("trust.the_real_one_goes_with_a_cv_made_for_it",
+                  st["Real Co"]["stage"] == "applied" and got
+                  and got[0][0] == "jobs@real.test" and got[0][1]
+                  and got[0][1][0].endswith("cv-Real Co.pdf")
+                  and st["Real Co"]["tailored_cv"]["experience"],
+                  f"{got} {made} {out.get('errors')}")
+            r = J.get_role(st["Fast Cash"]["key"])
+            J.update_role(r["key"], stage="drafted", fit={"score": 95},
+                          draft=dict(CLEAN), apply_email="x@fast.test")
+            check("trust.a_scam_never_passes_the_gate_without_you",
+                  "scam" in J._gate(J.get_role(r["key"]), J.auto_config())
+                  and "scam" not in J._gate({**J.get_role(r["key"]), "approved": True},
+                                            J.auto_config()))
+        section("auto.trust", trusted)
+
+        # --- one follow-up to an application that has gone quiet ----------- #
+        def followups():
+            fresh(settled=True)
+            sent_fu = []
+            was = O.send
+            O.send = lambda to, s_, b, **kw: (sent_fu.append((to, s_, b)) or {"ok": True})
+
+            class FU:
+                def chat(self, m, s, t=None, **kw):
+                    return blk(json.dumps({"subject": "Re: Application",
+                                           "body": "Following up on my application. I built a "
+                                                   "Medallion pipeline in Python at Standard Bank."}))
+            old = "2000-01-01 00:00 UTC"
+            quiet = role("Quiet", fit=90, email="q@q.test", draft=dict(CLEAN),
+                         stage="applied", stage_at=old, sent_at=old)
+            fresh_ = role("Recent", fit=90, email="r@r.test", draft=dict(CLEAN),
+                          stage="applied", stage_at=J._iso(), sent_at=J._iso())
+            answered = role("Answered", fit=90, email="a@a.test", draft=dict(CLEAN),
+                            stage="responded", stage_at=old)
+            portal_ = role("ViaForm", fit=90, draft=dict(CLEAN), stage="applied", stage_at=old)
+            try:
+                J.save_auto_config({"dry_run": False})
+                one = J.send_follow_ups(FU())
+                two = J.send_follow_ups(FU())
+            finally:
+                O.send = was
+            check("followup.a_quiet_emailed_application_gets_one_follow_up",
+                  [x[0] for x in sent_fu] == ["q@q.test"] and len(one["sent"]) == 1
+                  and J.get_role(quiet).get("follow_up_sent_at"),
+                  f"{sent_fu} {one}")
+            check("followup.never_twice_never_the_recent_the_answered_or_a_form",
+                  not two["sent"] and len(sent_fu) == 1)
+
+            class Invents:
+                def chat(self, m, s, t=None, **kw):
+                    return blk(json.dumps({"subject": "Re", "body": "I also run Kubernetes clusters at Google."}))
+            fresh(settled=True)
+            k = role("Fibber", fit=90, email="f@f.test", draft=dict(CLEAN),
+                     stage="applied", stage_at=old, sent_at=old)
+            sent_fu.clear()
+            O.send = lambda to, s_, b, **kw: (sent_fu.append(to) or {"ok": True})
+            try:
+                J.save_auto_config({"dry_run": False})
+                held = J.send_follow_ups(Invents())
+                J.save_auto_config({"dry_run": True})
+                J.update_role(k, follow_up=None)
+                rehearsed = J.send_follow_ups(FU())
+            finally:
+                O.send = was
+            check("followup.an_invented_claim_is_held_not_sent",
+                  held["held"] and not held["sent"])
+            check("followup.rehearsal_drafts_and_sends_nothing",
+                  rehearsed["drafted"] and not sent_fu, f"{rehearsed} {sent_fu}")
+            check("fetch.a_proxy_refusal_is_not_blamed_on_the_site",
+                  "proxy" in J._explain_fetch_error("ProxyError: 403 Forbidden")
+                  and "blocks automated" in J._explain_fetch_error("HTTPStatusError: 403 Forbidden"))
+        section("auto.followups", followups)
+
+        # --- the whole advert, read from its page where the board gave little #
+        def adverts():
+            ld = {"@context": "https://schema.org", "@type": "JobPosting", "title": "Data Engineer",
+                  "description": "<p>About us: we make maps.</p><p>" + "You will build pipelines. " * 20
+                                 + "Requirements: Python, dbt, Airflow. Apply to hiring@maps.test</p>",
+                  "datePosted": "2026-10-28", "validThrough": "2099-01-01",
+                  "hiringOrganization": {"@type": "Organization", "name": "Maps"},
+                  "baseSalary": {"@type": "MonetaryAmount", "currency": "ZAR",
+                                 "value": {"@type": "QuantitativeValue", "minValue": 50000,
+                                           "maxValue": 70000, "unitText": "MONTH"}}}
+            page = ("<html><head><script type='application/ld+json'>" + json.dumps(ld)
+                    + "</script></head><body><nav>Home Jobs</nav><main>ignored</main></body></html>")
+            a = J.read_advert(page)
+            check("adverts.a_jobposting_block_is_read_as_data",
+                  "Airflow" in a["text"] and a["posted_at"] == "2026-10-28"
+                  and a["salary"] == "ZAR 50,000–70,000 per month" and a["company"] == "Maps",
+                  f"{a}")
+            plain = J.read_advert("<html><body><nav>Menu Login</nav><main><h1>BI Developer</h1>"
+                                  "<p>Power BI and SQL, three days in the office.</p></main>"
+                                  "<footer>© Co</footer></body></html>")
+            check("adverts.without_one_the_main_text_is_read",
+                  "Power BI and SQL" in plain["text"] and "Menu" not in plain["text"]
+                  and "©" not in plain["text"])
+
+            fresh()
+            long_body = "Company blurb. " * 60 + " Must have: Kubernetes and Terraform."
+            J.add_roles([{"title": "Platform Engineer", "company": "Longco", "url": "https://l.test/1",
+                          "summary": long_body[:600], "description": long_body}])
+            r = [x for x in J.roles() if x["company"] == "Longco"][0]
+            check("adverts.the_whole_advert_is_kept_not_its_first_600_characters",
+                  "Kubernetes" in r["description"] and "Kubernetes" not in r["summary"]
+                  and "kubernetes" in J._advert_text(r))
+
+            pages = {"https://m.test/job/1": page,
+                     "https://m.test/job/2": page.replace("2099-01-01", "2020-01-01"),
+                     "https://m.test/job/3": "<html><body><main>" + "Real words. " * 50 + "</main></body></html>"}
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: pages[url]
+            try:
+                J.add_roles([{"title": "Data Engineer", "company": "Maps", "url": "https://m.test/job/1"},
+                             {"title": "Old Engineer", "company": "Maps", "url": "https://m.test/job/2"},
+                             {"title": "Plain Role", "company": "Plain", "url": "https://m.test/job/3"},
+                             {"title": "On LinkedIn", "company": "LI", "url": "https://www.linkedin.com/jobs/view/1"}])
+                er = J.enrich_roles()
+                again = J.enrich_roles()
+            finally:
+                J.JOB_FETCHER = was
+            by = {x["title"]: x for x in J.roles()}
+            check("adverts.a_short_role_is_read_from_its_page",
+                  "Airflow" in by["Data Engineer"]["description"]
+                  and by["Data Engineer"]["apply_email"] == "hiring@maps.test"
+                  and by["Data Engineer"]["salary"].startswith("ZAR")
+                  and by["Data Engineer"]["posted_at"] == "2026-10-28"
+                  and er["emails"] == 1, f"{er} {by['Data Engineer']}")
+            check("adverts.a_closing_date_in_the_past_closes_it",
+                  by["Old Engineer"]["stage"] == "closed" and er["closed"] == 1)
+            check("adverts.linkedin_is_never_read_and_nothing_is_read_twice",
+                  not by["On LinkedIn"].get("enriched_at") and again["read"] == 0)
+            # a listings page: same title, no company, different adverts
+            fresh()
+            J.add_roles([{"title": "Data Engineer", "company": "", "url": f"https://board.test/job/{i}"}
+                         for i in range(5)])
+            J.add_roles([{"title": "Data Engineer", "company": "", "url": "https://board.test/job/0"}])
+            five = [r for r in J.roles() if r["title"] == "Data Engineer"]
+            J.dedupe_roles()
+            check("adverts.five_roles_with_one_title_on_a_listings_page_stay_five",
+                  len(five) == 5 and len([r for r in J.roles() if r["title"] == "Data Engineer"]) == 5
+                  and len({r["key"] for r in five}) == 5, f"{[r['key'] for r in five]}")
+            J.add_roles([{"title": "Data Engineer", "company": "Acme", "url": "https://a.test/1",
+                          "apply_email": "a@a.test"},
+                         {"title": "Senior Data Engineer", "company": "Acme", "url": "https://b.test/9"}])
+            check("adverts.the_same_vacancy_at_a_named_company_still_merges",
+                  J.dedupe_roles().get("removed") == 1)
+        section("auto.adverts", adverts)
+
+        # --- what the live boards taught: places, feeds, searchable boards --- #
+        def live():
+            from agent import geo
+            FX = ROOT / "tests" / "fixtures" / "live"
+            A = geo.allowed_from(["Remote", "South Africa"], home="Johannesburg, South Africa")
+            keep = lambda loc, **k: geo.decide(loc, A, remote_only=True, **k)[0]
+            check("geo.plain_remote_is_open_to_you",
+                  keep("Remote") and keep("") and keep("Anywhere in the World") and keep("Worldwide"))
+            check("geo.a_grouping_that_contains_your_country_includes_you",
+                  keep("EMEA") and keep("Remote, Sub-Saharan Africa") and keep("Africa")
+                  and keep("Remote, Nigeria; Remote, South Africa") and not keep("Remote, MENA"))
+            check("geo.remote_for_people_elsewhere_is_not_for_you",
+                  not keep("Remote, United States") and not keep("Remote, US")
+                  and not keep("Remote, South Korea") and not keep("New York, NY (HQ) (remote)")
+                  and not keep("USA Only") and not keep("Toronto, ON (remote)"))
+            check("geo.letters_inside_a_word_are_not_a_country",
+                  geo.read_place("Lausanne")["countries"] == {"CH"}
+                  and geo.read_place("Albuquerque, New Mexico")["countries"] == {"US"}
+                  and "IE" not in geo.read_place("Northern Ireland")["countries"]
+                  and geo.read_place("Remote, Guinea-Bissau")["countries"] == {"GW"})
+            check("geo.your_own_towns_and_their_suburbs_are_yours",
+                  keep("Sandton") and keep("Cape Town: Southern Suburbs") and keep("Kwazulu Natal")
+                  and not keep("Bangalore, India") and not keep("London, UK"))
+            check("geo.a_timezone_is_a_wish_not_a_border", keep("Time zone: CET (+/- 3 hours)"))
+            check("geo.the_boards_own_list_of_countries_decides",
+                  geo.decide("Remote (53 countries)", A, countries=["ZA", "DE"])[0]
+                  and not geo.decide("Remote (2 countries)", A, countries=["US", "CA"])[0]
+                  and geo.decide("Bellville", geo.allowed_from(["South Africa"]),
+                                 default_country="ZA", remote_only=False)[0])
+            check("geo.the_reason_is_a_sentence",
+                  geo.decide("Remote, Canada; Remote, United States", A)[2]
+                  == "open only to people in Canada, United States")
+            check("geo.text_decoded_wrongly_is_put_right_and_good_text_left",
+                  geo.fix_text("M" + chr(0xC3) + chr(0xBC) + "nchen") == "München"
+                  and geo.fix_text("château Zürich") == "château Zürich")
+            e = geo.eligibility("You must be based in the United States. We are unable to sponsor visas.")
+            check("geo.an_advert_that_says_who_may_apply_is_read",
+                  e["countries"] == {"US"} and e["no_sponsorship"]
+                  and "based in United States" in geo.blocked_by_advert(
+                      "You must be based in the United States.", A)
+                  and not geo.blocked_by_advert("Our offices are in New York and London.", A))
+
+            def parse(kind, name, url=""):
+                J._CURRENT_SOURCE_URL["url"] = url
+                return J._PARSERS[kind]((FX / name).read_text("utf-8"))
+            w = parse("rss", "wwr_all.rss", "https://weworkremotely.com/remote-jobs.rss")
+            check("feeds.we_work_remotely_says_who_each_role_is_open_to",
+                  len(w) == 6 and all(j["company"] and j["remote"] and j["closes_at"] for j in w)
+                  and {j["location"] for j in w} <= {"Anywhere in the World", "USA Only", "Europe Only",
+                                                     "Latin America Only", "North America Only"}
+                  and all(len(j["description"]) > 200 for j in w), f"{[(j['company'], j['location']) for j in w]}")
+            jr = parse("rss", "jobicy.rss", "https://jobicy.com/feed") + parse("rss", "jobspresso.rss", "https://jobspresso.co/feed")
+            check("feeds.the_company_the_place_and_the_advert_survive_a_picture_tag",
+                  len(jr) == 6 and all(j["company"] and j["location"] != "Remote" and len(j["description"]) > 200
+                                       for j in jr) and any(j["salary"] for j in jr))
+            h = parse("himalayas", "himalayas.json")
+            check("feeds.himalayas_carries_the_countries_pay_and_closing_date",
+                  len(h) == 4 and all(j["remote"] and j["closes_at"] and j["company"] for j in h)
+                  and all(isinstance(j["countries"], list) for j in h))
+            check("feeds.jobicy_working_nomads_and_arbeitnow_are_read",
+                  len(parse("jobicy", "jobicy.json")) == 4 and len(parse("workingnomads", "workingnomads.json")) == 4
+                  and len(parse("arbeitnow", "arbeitnow.json")) == 4
+                  and all(j["company"] and j["posted_at"] for j in parse("jobicy", "jobicy.json")))
+            pn = parse("stepstone", "pnet.html", "https://www.pnet.co.za/jobs/data-engineer")
+            check("feeds.pnet_is_read_from_its_data_not_its_menu",
+                  len(pn) == 5 and all(j["company"] and j["country"] == "ZA" and j["posted_at"]
+                                       and j["closes_at"] and j["source"] == "PNet" for j in pn))
+            hn = parse("hn", "hn.json")
+            check("feeds.a_hiring_thread_gives_companies_roles_and_who_to_write_to",
+                  len(hn) >= 3 and all(j["company"] and j["title"] and "ycombinator" in j["url"] for j in hn)
+                  and any(j["apply_email"] for j in hn), f"{[(j['company'], j['title']) for j in hn]}")
+            check("search.a_title_is_matched_by_what_it_means",
+                  J._title_has("Data Engineer", "Senior Engineer, Data Platform")
+                  and J._title_has("BI Developer", "Business Intelligence Developer")
+                  and J._title_has("Machine Learning Engineer", "ML Engineer")
+                  and not J._title_has("Data Engineer", "Data Analyst")
+                  and not J._title_has("Data Engineer", "Software Engineer"))
+
+            # a searchable board is asked for each of your titles, in your
+            # country, and no more often than it asks to be
+            fresh()
+            J.save_profile({**J.profile(), "location": "Johannesburg, South Africa",
+                            "target_roles": ["Data Engineer", "BI Developer"],
+                            "locations_ok": ["Remote", "South Africa"]})
+            asked = []
+            page = (FX / "himalayas.json").read_text("utf-8")
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: (asked.append(url) or page)
+            try:
+                src = {"name": "H", "kind": "himalayas", "min_hours": 20,
+                       "url": "https://himalayas.app/jobs/api/search?q={query}&country={country}"}
+                r1 = J.read_source(src)
+                n1 = len(asked)
+                J.read_source(src)
+            finally:
+                J.JOB_FETCHER = was
+            check("search.a_searchable_board_is_asked_for_your_titles_in_your_country",
+                  n1 == 2 and "q=Data+Engineer&country=ZA" in asked[0] and "q=BI+Developer" in asked[1]
+                  and len(r1["jobs"]) == 4, f"{asked}")
+            check("search.a_board_is_not_asked_again_before_it_asks_to_be", len(asked) == n1)
+            check("search.the_default_bar_is_the_scale's_worth_applying", J.AUTO_DEFAULTS["min_score"] == 70
+                  and "70-84" in J._SCORE_SYSTEM and "CV_EXCERPTS" in J._SCORE_SYSTEM)
+        section("auto.live", live)
+
+        # --- Autopilot, starting with the computer, and licence keys -------- #
+        def autopilot_checks():
+            import agent.autopilot as AP, agent.autostart as AS, agent.license as LIC
+            import agent.scheduler as _sch, agent.boards as BD, agent.cvstore as CVS
+            _axc.AGENT_HOME = Path(_axt.mkdtemp(prefix="ap-"))
+            _axc.DB_PATH = _axc.AGENT_HOME / "a.db"
+            m = _RMS(db_path=_axc.AGENT_HOME / "s.db", check_same_thread=False)
+            CV = ("Thandi Mokoena\nSenior Data Engineer\nJohannesburg, South Africa\n\n"
+                  "EXPERIENCE\nSenior Data Engineer — Blue Crane Bank (2021 – present)\n"
+                  "- Rebuilt the nightly load in Python and SQL.\n"
+                  "BI Developer — Karoo Analytics (2016 – 2018)\n- Built Power BI dashboards.\n")
+
+            class Eng:
+                def chat(self, msgs, system, tools=None, **kw):
+                    sysx = " ".join(system) if isinstance(system, list) else str(system)
+                    if "which job titles" in sysx:
+                        return blk(json.dumps({"target_roles": ["Data Engineer", "BI Developer"],
+                                               "education": ["BSc Computer Science, Wits, 2015"],
+                                               "country": "South Africa"}))
+                    return blk(json.dumps({"full_name": "Thandi Mokoena", "location": "Johannesburg, South Africa",
+                                           "summary": "Data engineer.", "skills": ["Python", "SQL"],
+                                           "employers": ["Blue Crane Bank"]}))
+            was_add, was_start = BD.auto_add, J.start_run
+            started = []
+            BD.auto_add = lambda p, limit=5: (J.add_job_source("B1", "https://b1.test/feed", "rss"),
+                                              {"ok": True, "added": [{"name": "B1"}], "rejected": []})[1]
+            J.start_run = lambda kind, brain, model=None, finish=None: (started.append(kind) or {"ok": True})
+            try:
+                r = AP.setup(CV, "cv.txt", brain=Eng(), memory=m, scheduler=_sch, every_hours=4)
+                p = J.profile()
+                check("autopilot.a_cv_becomes_a_running_job_search",
+                      r["ok"] and r["ready"] and started == ["cycle"]
+                      and p["target_roles"] == ["Data Engineer", "BI Developer"]
+                      and p["locations_ok"] == ["Remote", "South Africa"] and p["education"]
+                      and J.schedule_enabled(m) and J.schedule_info(m)["every_hours"] == 4
+                      and J.auto_config()["enabled"] and J.auto_config()["dry_run"] is True
+                      and all(st["ok"] for st in r["steps"]), f"{r['steps']}")
+                check("autopilot.it_says_what_only_you_can_supply",
+                      any("email" in n["what"].lower() or "contact" in n["what"].lower() for n in r["needs"]))
+                _axc.AGENT_HOME = Path(_axt.mkdtemp(prefix="ap2-"))
+                r2 = AP.setup(CV, "cv.txt", brain=None, memory=m, scheduler=_sch, start=True)
+                check("autopilot.without_an_engine_it_reads_titles_off_the_cv_and_says_so",
+                      "Data Engineer" in J.profile()["target_roles"] and not r2["ready"]
+                      and any(n["where"] == "engines" for n in r2["needs"]), f"{J.profile()['target_roles']}")
+                st = AP.status(m)
+                check("autopilot.status_is_one_plain_answer",
+                      isinstance(st["says"], str) and "hours_saved" in st and "needs_you" in st)
+            finally:
+                BD.auto_add, J.start_run = was_add, was_start
+
+            win = AS._content("win32"); mac = AS._content("darwin"); lin = AS._content("linux")
+            check("autostart.each_system_gets_a_quiet_start_of_this_copy",
+                  "--no-browser" in win and "WScript.Shell" in win and ", 0, False" in win
+                  and "RunAtLoad" in mac and "--no-browser" in mac
+                  and "Terminal=false" in lin and "run_jobs.py" in lin
+                  and str(AS._target("win32", Path("/h"))).endswith(".vbs")
+                  and "LaunchAgents" in str(AS._target("darwin", Path("/h"))))
+            import os as _os
+            old_x = _os.environ.get("XDG_CONFIG_HOME")
+            _os.environ["XDG_CONFIG_HOME"] = str(_axc.AGENT_HOME / "xdg")
+            try:
+                if not sys.platform.startswith(("win", "darwin")):
+                    on = AS.enable(); off = AS.disable()
+                    check("autostart.on_writes_one_file_and_off_removes_it",
+                          on["ok"] and on["on"] and Path(on["path"]).name == "agent-jo-jobs.desktop"
+                          and off["ok"] and not off["on"] and not Path(on["path"]).exists())
+            finally:
+                if old_x is None:
+                    _os.environ.pop("XDG_CONFIG_HOME", None)
+                else:
+                    _os.environ["XDG_CONFIG_HOME"] = old_x
+
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+            k = ed25519.Ed25519PrivateKey.generate()
+            priv = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                   serialization.NoEncryption())
+            pub = k.public_key().public_bytes(serialization.Encoding.PEM,
+                                              serialization.PublicFormat.SubjectPublicKeyInfo)
+            key = LIC.issue(priv, "Thandi Mokoena", "t@example.com", "pro", 30)
+            other = ed25519.Ed25519PrivateKey.generate().private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            check("licence.a_key_is_read_only_if_the_seller_signed_it",
+                  LIC.read(key, pub)["ok"] and LIC.read(key, pub)["tier"] == "pro"
+                  and not LIC.read(key[:-4] + "AAAA", pub)["ok"]
+                  and not LIC.read(LIC.issue(other, "X"), pub)["ok"]
+                  and not LIC.read("hello", pub)["ok"])
+            from datetime import datetime as _dt, timezone as _tz
+            check("licence.an_expired_key_says_so",
+                  LIC.read(LIC.issue(priv, "X", days=1, now=_dt(2020, 1, 1, tzinfo=_tz.utc)), pub).get("expired"))
+            check("licence.a_copy_with_no_public_key_is_fully_unlocked",
+                  not LIC.enforced() and LIC.status()["tier"] == "pro" and LIC.limit("daily_cap") is None
+                  and LIC.allows("submit_forms") and LIC.schedule_ok(2))
+            was_pub = LIC.PUBKEY
+            LIC.PUBKEY = _axc.AGENT_HOME / "licence-key.pub"
+            LIC.PUBKEY.write_bytes(pub)
+            try:
+                free = LIC.status()
+                check("licence.without_a_key_the_free_limits_apply",
+                      free["tier"] == "free" and LIC.limit("daily_cap") == 5 and not LIC.allows("submit_forms")
+                      and LIC.schedule_ok(0) and not LIC.schedule_ok(4))
+                fresh(settled=True, daily_cap=50)
+                LIC.PUBKEY = _axc.AGENT_HOME / "licence-key.pub"; LIC.PUBKEY.write_bytes(pub)
+                for i in range(8):
+                    role(f"Capped {i}", fit=90, email=f"c{i}@c.test", draft=dict(CLEAN))
+                out = J.auto_apply(None)
+                check("licence.the_free_tier_sends_five_a_day", len(out["sent"]) == 5
+                      and any("daily cap of 5" in h["reason"] for h in out["held"]), f"{len(out['sent'])}")
+                act = LIC.activate(key)
+                check("licence.a_key_lifts_them", act.get("ok") and LIC.status()["tier"] == "pro"
+                      and LIC.limit("daily_cap") is None and LIC.schedule_ok(4))
+                LIC.deactivate()
+            finally:
+                LIC.PUBKEY = was_pub
+            check("licence.the_private_key_never_ships",
+                  '"licence-key.private"' in (ROOT / "tools" / "make_release.py").read_text("utf-8")
+                  and "*.private" in (ROOT / ".gitignore").read_text("utf-8"))
+        section("auto.autopilot", autopilot_checks)
 
         # --- one run at a time, in the background --------------------------- #
         def runs():

@@ -861,3 +861,330 @@ It's the last thing in the file now, and a check makes sure it stays there.
   be brought back by the app, but nothing is dropped from now on.
 - Check: `roles.no_cap_on_how_many_are_kept` (749 runnable pass); 360 roles
   added in three batches are all kept.
+
+### 33. It gets through the whole list now
+
+Asked for: it should work end to end and apply to a lot of jobs. A full cycle
+was run against a 300-role board, a scripted engine and a stand-in mailbox,
+and it found 40 roles, drafted all 40, and sent none. Four things stood in
+the way; all four are fixed.
+
+- **A held draft is repaired once before it's held.** The claims check flags
+  any capitalised word the profile doesn't contain, so one ordinary word in
+  an engine's letter ("European hours") held the application for you, and at
+  volume that was nearly every one. Now a draft the check flags is written
+  again, once, with the engine told exactly which words and claims to drop.
+  The check reads the new draft just as strictly. If the second draft is no
+  better, the first is kept and held as before, so nothing unsourced is ever
+  sent. A weak draft gets the same single redraft, in the same call, told
+  what read weak. Each role records what the repair did
+  (`redrafted_for_claims`, `redrafted_for_quality`).
+- **Several roles at once.** Scoring and drafting made one engine call at a
+  time: 150 roles took 97 seconds against an engine answering in a fifth of a
+  second, and most of an hour against a real one. Four roles now go side by
+  side (Auto-apply → *Engine calls at once*, 1 to 8; use 1 for a slow local
+  model), which brought the same run down to 26 seconds. It still goes one at a time
+  until the engine has answered once, so a dead engine is asked three times,
+  as before, and not once for every role already in flight.
+- **More than 40 new roles a run.** Discovery kept the first 40 matches and
+  dropped the rest every run. That number is now *New roles taken on per
+  run* (default 150, up to 1000). Roles it already tracks no longer use up
+  that room: a board listing the same 40 every day used to fill it with roles
+  that were going to be skipped anyway.
+- **The caps are yours to set.** *Company forms per run* had no setting at
+  all and was fixed at 5. It is on the form now (default 15, up to 100).
+  *Most per day* now defaults to 25 instead of 5, and goes up to 200. Every
+  gate is unchanged: fit threshold, deal-breakers, claims check, quality bar,
+  the settling-in pace for the first three days live, and the email rate
+  limits.
+- Checks: 5 new `volume.*` (778 pass); the window suite and the real-browser
+  layout and navigator checks pass.
+
+### 34. The scheduled run runs, and as often as you like
+
+- **"Set up the daily loop" set up nothing.** The button made its own
+  schedule, with an empty spec and no next run, and the scheduler only picks
+  up schedules that have one, so it never came due. It wasn't recorded
+  either, so the Daily switch beside it read off. Pressing the button again
+  when a schedule existed cleared that schedule's next run, so it also
+  stopped a daily run that was working. The button and the switch now go
+  through the same schedule-maker. It adopts and repairs a schedule that
+  already exists rather than adding a second one, and there is only ever
+  one cycle schedule, so the cycle can't run twice. A broken one left by the
+  old button is repaired when the app starts, and it says so.
+- **As often as you say.** Auto-apply → *How often*: once a day at 07:00, or
+  every 12, 8, 6, 4, 3 or 2 hours. A run every few hours finds roles in their
+  first hours, when an application is most likely to be read. The first
+  timed run starts within two minutes of switching on. All of a day's runs
+  share the day's cap.
+- **You can see it's working.** Under the switch: when the next run is, and
+  what the last one did, or that it failed and why. A schedule that never
+  ran used to look exactly like one that was working.
+- Checks: 6 new `schedule.*` (784 pass); the window suite and the
+  real-browser layout and navigator checks pass.
+
+### 35. Ghost jobs, scams, and a CV with every application
+
+Asked for: the features these apps are adding now. In 2026 that means
+ghost-job and scam detection, and a CV tailored to each advert built into
+the auto-apply flow. Building them turned up two things that were quietly
+broken.
+
+- **Emailed applications had no CV.** The email sender couldn't attach
+  anything, so every emailed application went out as a covering letter
+  alone. Now each one carries a CV: one reordered for that advert if there
+  is one, else the file you uploaded, else a clean PDF made from your
+  profile (Word if the browser isn't there). If no CV can be made, it
+  still sends, and the run report says so.
+  Auto-apply → *Attach a CV to every emailed application*.
+- **A CV for each advert, inside the run.** Once a role's letter is ready
+  to go, the engine reorders your CV for that advert. It's kept only if the
+  CV check finds nothing invented, the same strictness as the letters, and
+  the same file goes to company forms. *Tailor the CV to each advert*.
+- **Ghost jobs** (`agent/trust.py`). Scored 0-100 from the advert alone:
+  up for 30 or 60+ days, reposted with a new date while tracked, "talent
+  pool / future opportunities" wording, the same title listed three or more
+  times at once. At 60 or more it's skipped before any engine call.
+  *Skip likely ghost jobs*.
+- **Scams.** Any one strong sign is enough: a fee to start, a cheque to
+  deposit and send back, payment by gift card or wire, an interview on
+  Telegram or WhatsApp, reshipping parcels, bank or ID details before an
+  interview. Two weaker signs together count too ("earn $900 a week",
+  "no experience needed", a company advert asking for replies at a Gmail
+  address). A scam is set aside in the run and refused at the send gate
+  too, unless you approve it yourself. An advert *about* payments isn't
+  one: the patterns look for the request, not the topic.
+- **Pay**, when the advert gives it ("R45,000 pm", "$120k–$140k per year"),
+  shows on the role. Roles show *scam?* / *ghost?* tags, and the details
+  say why.
+- **Every role was "0 days old".** Its age was read from a field nothing
+  ever wrote, so "freshest first" sorted nothing and no role was ever
+  labelled stale. Every board's own posting date is kept now (Remotive,
+  RemoteOK, RSS, Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
+  Recruitee, Workday's "Posted 3 Days Ago", BambooHR, Personio). Age counts
+  from that date, else from when the role was found.
+- **"No reply after 30 days" counted from the advert**, not from when you
+  applied. It counts from the application now.
+- README: *Which sites it works with*.
+- Checks: 9 new `trust.*` (793 pass); the window suite and the real-browser
+  layout check pass.
+
+### 36. The live check
+
+Asked for: test it against live job boards, a real mail account and a real
+engine. The test suite proves the logic against stand-ins. Only your machine,
+with your settings, can prove the outside world answers.
+`python tools/live_check.py --all` does that, and changes nothing it
+doesn't have to:
+
+- **Boards:** every source you've added is read live (the suggested ones
+  if you haven't added any). For each: how many roles, how fast, the newest
+  posting date, how many have an email address, and how many look like
+  scams or ghost jobs. Nothing is added and no source's status is touched.
+  `--browser` includes browser sources.
+- **Engine:** your engine scores one live role that matches your profile,
+  then drafts a letter for it, with the time each took, the letter's
+  quality and whether the claims check passes. The letter is printed.
+- **Email** (`--email`): one message, to **your own** sending address and
+  never to an employer, carrying the CV an application would. What you
+  receive is what an employer would see.
+- **Inbox** (`--inbox`): logs in and reads the last week, marking nothing
+  as read.
+
+Run here, with no network to the boards and no engine key, it said so for
+each, plainly, and exited 1. Its email step, pointed at a real SMTP server
+on the same machine, delivered the message with its PDF. A full cycle sent
+through that server delivered four applications, each with a 20 KB PDF CV
+made for that company.
+
+### 37. One follow-up, sent for you, and an honest word about proxies
+
+- **Quiet applications get one follow-up.** The app could draft a follow-up
+  but never sent one, so every application that got no answer just waited.
+  Each run now sends one short follow-up to every emailed application with
+  no reply after 7 days (Auto-apply → *Follow up after*, 2-30; up to 10 a
+  run). It goes once, to the address the application went to, threaded as
+  "Re: …". It runs after the inbox is read, so anyone who has answered,
+  yes or no, isn't chased. Form applications aren't followed up: there's
+  no address to write to. The follow-up passes the same claims check as
+  the letters, gets the same one-time repair redraft, and is held for you
+  if it still claims too much. In rehearsal it's drafted and nothing goes.
+  Switch: *Follow up once on emailed applications with no reply*.
+- **"Following" is not a claim.** A follow-up beginning "Following up on…"
+  was held for mentioning "Following". Words that open a sentence and can
+  never be a claim ("Following", "Just", "Regarding", "However", "First",
+  …) are no longer flagged.
+- **A proxy's "no" is no longer blamed on the site.** A connection refused
+  by a proxy (a work or school network, a VPN, a locked-down server) was
+  reported as "blocks automated readers (403), try Use browser". The
+  browser goes through the same proxy and fails the same way. Now it says
+  the proxy refused and the site was never reached.
+- Through a real SMTP server: two applications sent; eight days later the
+  one whose company had replied wasn't chased and the other got one
+  follow-up; a third run sent none.
+- Checks: 5 new `followup.*` / `fetch.*` (798 pass); the window suite and
+  the layout check pass.
+
+### 38. It reads the whole advert, and keeps every role on a listings page
+
+Found by running a full cycle over real HTTP, against a job site on the same
+machine: a listings page of 30 adverts, each with a schema.org JobPosting
+block. 30 roles were found, 3 were kept, and the engine had never seen a
+whole advert.
+
+- **The engine judged every role on its first 600 characters.** Adverts were
+  cut to a 600-character summary when saved. Scoring, drafting, CV
+  tailoring, the ATS scan, the quality check and the mock interview all
+  read a `description` field that was never saved. Adverts open with the
+  company blurb, so the requirements were usually past the cut. Every
+  board's full text is kept now (up to 4,000 characters), and the claims
+  check may echo any of it.
+- **A role with only a title is read from its advert page.** A listings
+  page gives a title and a link, an RSS feed a line or two. Before scoring,
+  up to 40 such roles a run are read from their own page, four at a time,
+  at the polite pace. The JobPosting block is read first when there is one
+  (the format job pages publish for Google): the full description, the
+  posting and closing dates, the pay and the employer. Otherwise it reads
+  the page's main text, without its menus and footer. An advert whose
+  closing date has passed is closed. An application address in the advert
+  is kept, so the role goes by email rather than as a form for you to
+  finish. LinkedIn, Indeed, Glassdoor and Seek are never read. A page that
+  can't be read changes nothing and isn't tried every run.
+  Auto-apply → *Read the full advert when a board shows only a title*.
+- **Every "Data Engineer" on a listings page was the same role.** With no
+  company, a role's key was its title alone, so add_roles kept the first of
+  each title. The duplicate check then merged the rest by title, leaving
+  three roles from thirty. Without a company, a role is now keyed by its
+  site and a fingerprint of its link, and only the same advert counts as a
+  duplicate. Adverts are read before duplicates are merged, so the
+  employer's name is known by then, and the same vacancy on two boards at a
+  named company still merges.
+- **A thin JobPosting block kept its dates.** Its date, pay and employer are
+  kept even when its description is too short to use, and its words are
+  read with the page's. A five-month-old "talent pool" advert had looked
+  brand new.
+- Over real HTTP and real SMTP: all 30 roles kept and read; 15
+  application addresses found in the adverts (the listings page showed
+  none); 15 applications delivered, each with a PDF CV; the scam, the
+  expired advert and the five-month-old talent pool closed; the engine saw
+  the requirements in 27 of 28 scorings.
+- Checks: 8 new `adverts.*` (806 pass); the window suite and the layout
+  and navigator checks pass.
+
+### 39. The release runs on a Mac or Linux after unzipping
+
+Found by installing the release zip from scratch, the way the README says:
+`./install.sh` failed with "Permission denied". The zip wrote every file
+with no permissions, and git held the scripts as ordinary files, so on macOS
+and Linux neither `install.sh`/`start.sh` nor a double-clicked
+`install.command`/`start.command` would run. Windows was unaffected. The
+scripts are executable in git now, and `tools/make_release.py` writes them
+into the zip as runnable (755) and everything else as 644.
+
+From the fresh zip, `./install.sh` built its environment, installed the
+packages and checked the app loads. `./start.sh` served the window in a
+second, with this release's defaults (25 a day, ghost and scam screening,
+a CV on every email, follow-ups, adverts read in full). Build stamp
+2026-11-02.
+
+### 40. Tested against the real world, and rebuilt where it failed
+
+Asked for: make it autonomous, and software people would pay for. For the
+first time it was run against the real job boards and a real AI engine
+(DeepSeek). Mail went to a test server on the same machine and company forms
+were off, so nothing reached an employer. It read 1,497 live roles and kept
+32, nearly all title-only links from one site. Each cause is fixed, and the
+same search now keeps 178 relevant roles.
+
+- **Plain "Remote" was read as a region that excluded you.** Anyone who had
+  said where they can work lost every role on We Work Remotely, RemoteOK and
+  Jobicy. "EMEA" excluded someone in South Africa. "Remote, US" and "Remote,
+  South Korea" were kept, and "Lausanne" was the USA because the letters
+  are in it. `agent/geo.py` knows the places: countries and their other
+  names, the groupings adverts use (EMEA, APAC, LATAM, DACH, the EU), US
+  states, Canadian provinces and the cities that turn up most. A skipped
+  role's reason is a sentence: "open only to people in Canada, United
+  States". An unfamiliar town on a remote role is kept for the fit score to
+  judge.
+- **Feeds lost the company and the advert.** A picture tag wiped the
+  description it shares a name with, and the tags boards use for the
+  company, the region, the pay and the closing date weren't read. We Work
+  Remotely says who each role is open to ("Anywhere in the World", "USA
+  Only"); that is now used.
+- **Boards read from the data they publish**, searched for your own job
+  titles where they allow it: Himalayas (over 100,000 remote roles, each
+  with the countries it is open to), PNet (3,264 results for "data engineer";
+  the old reader returned its menu), Jobicy, Working Nomads, Arbeitnow and
+  Hacker News' monthly hiring thread. Each is asked no more often than its
+  own terms allow; the answer is kept until then.
+- **"Application addresses" were the small print.** The first address in
+  an advert was taken as where to apply. On live adverts that was the
+  disability-accommodations mailbox, the data-protection officer, or where
+  to report a fake recruiter, most of them called careers@ or recruiting@.
+  An address is now used only when the advert asks for applications at it.
+  Across 335 live adverts on the remote boards none did; on Hacker News 12
+  of 35 roles do.
+- **The real engine scored a senior data engineer 62 for senior data
+  engineer roles**, and called a degree and a tool missing that were on the
+  CV. The scorer now sees the CV, and has a scale: 70 and over is worth
+  applying, a tool from another vendor is a near-match, a different
+  discipline or an unmet hard requirement scores low. The same 24 live
+  roles went from 2 clearing the bar to 11, and the wrong jobs stayed at
+  the bottom. The default bar is 70.
+- **Adverts that rule you out are skipped for free**: "must be based in
+  the United States", "right to work in the UK", "no visa sponsorship" for
+  a role somewhere you can't work. 21 of 473 live adverts said so, some of
+  them listed as "Anywhere in the World".
+- A job title is matched by what it means ("Senior Engineer, Data Platform"
+  is a data engineer; "Business Intelligence Developer" is a BI developer),
+  sources take turns so one large board can't fill a run, and text boards
+  serve garbled ("MÃ¼nchen") is put right.
+- Checks: 22 new, on fixtures cut from the live responses.
+
+### 41. Autopilot: give it your CV
+
+Eight steps across five screens stood between installing and the first role.
+*Overview → Start Autopilot* does them from a CV, pasted or uploaded, and
+says what it did at each: reads the CV, builds the profile, works out five
+to eight job titles to search for (the one you hold, the step up, the other
+names the work goes by), sets where you can work (remote, and the country
+you live in), finds boards that suit you and checks each one answers,
+switches on a run every four hours, and starts the first. What only you can
+supply is listed. Nothing is sent by it: the level stays where you set it
+and a new install stays in rehearsal.
+
+Run live from a CV alone: set up in 47 seconds, eight titles, eight boards;
+the first run found 94 roles and drafted 47 applications, every one clean on
+the claims check (19 after one repair), 43 with a CV tailored to the advert.
+
+The Overview now opens with one answer: whether Autopilot is running, when
+it runs next, what the last run did, applications sent, replies, interviews,
+and anything waiting for you.
+
+### 42. It starts with the computer
+
+Autopilot only ran while the app was open. *Overview → Start with this
+computer* starts it quietly when you sign in (no window, no console) on
+Windows, macOS and Linux, by writing one small file where each system looks
+and removing exactly that file when switched off. A run missed while the
+computer was off happens at the next start.
+
+### 43. Licence keys
+
+A free tier with limits and a paid tier a key unlocks (`agent/license.py`).
+A key is a signed statement of who it is for, which tier and until when,
+checked on the buyer's computer against `licence-key.pub`: no account, no
+server, nothing sent. What each tier allows is in `agent/tiers.json` for you
+to edit. As shipped: Free is 5 applications a day, one run a day, forms
+filled but not submitted, no follow-ups or tailored CVs; Pro is everything.
+
+- `python tools/make_licence.py --make-key` once, then
+  `--name "A Buyer" --email a@b.c --days 365` prints a key. The buyer pastes
+  it under *Engines → Licence*.
+- **Until you make a key pair, every copy is fully unlocked**, yours
+  included. Limits begin with the first release that carries
+  `licence-key.pub`.
+- The private key is never packaged or committed. An expired key drops to
+  the free limits and touches no data.
+- Checks: 13 new `autopilot.*`, `autostart.*`, `licence.*` (841 pass); the
+  window suite and the real-browser layout and navigator checks pass.

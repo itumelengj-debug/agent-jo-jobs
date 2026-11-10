@@ -39,6 +39,15 @@ replies shape the tone of the next ones. And it learns which boards reply,
 whether your fit score predicts anything, and whether email beats a portal.
 Every rate carries the range it could really be.
 
+## Autopilot
+
+Open it, paste or upload your CV on the Overview, and press **Start
+Autopilot**. It builds your profile, works out which job titles to search
+for, finds boards that suit you, and runs every four hours. Tick **Start
+with this computer** and it runs whether or not the window is open. It
+starts in rehearsal: it drafts and prepares, and sends nothing until you
+choose a level under Auto-apply.
+
 ## Install
 
 Windows — double-click **`install.bat`**. It finds or installs Python, sets
@@ -146,6 +155,41 @@ reused once you switch them on.
 Waiting on you* lists each one with the applications it's holding up. Answer
 it once and every one of those forms, and every later one, gets it.
 
+### Which sites it works with
+
+**Finding roles** (Sources):
+
+- **Job boards with a feed:** Remotive, RemoteOK, We Work Remotely, Working
+  Nomads, Jobicy, Jobspresso, EU Remote Jobs, and any board with an RSS or
+  Atom feed.
+- **Company hiring systems, read directly:** Greenhouse, Lever, Ashby,
+  Workable, SmartRecruiters, Recruitee, Workday, BambooHR, Personio and
+  Teamtailor. Paste a company's careers page and it finds which one is
+  behind it.
+- **Ordinary web pages:** Himalayas, Wellfound, Careers24, CareerJunction,
+  PNet, OfferZen, or any listings page. Pages drawn by JavaScript or behind
+  a sign-in use the **browser** source kind.
+- **Boards that block reading:** the alert emails they send you
+  (*Sources → Alerts*).
+
+**Applying:**
+
+- **By email:** any advert with an address. The letter goes from your own
+  account, with a CV made for that role attached.
+- **Through the company's own form:** any company site, step by step. It
+  knows Workday's multi-page applications and remembers each site and hiring
+  system it has filled before.
+- **Never automated:** LinkedIn, Indeed, Seek and Glassdoor. Automating them
+  breaks their terms and gets accounts restricted, so those adverts are
+  tracked for you to apply to yourself. Sign-ins and captchas on any site are
+  handed to you.
+
+**Ghost jobs and scams** are read from each advert before anything is spent
+on it. Adverts up for months, reposted, or collecting CVs for a "talent
+pool" are skipped as likely ghost jobs, and you can switch that off. Adverts
+asking for a fee, a cheque deposit, or an interview over Telegram or
+WhatsApp are never applied to unless you approve them yourself.
+
 ### Company sites it has never seen
 
 Most adverts send you to a company's own site, and every site is different.
@@ -205,6 +249,16 @@ auto-apply settings, the browser logins for job sites, your engines and their
 keys, and the daily run. It only copies; Agent Jo's folder is left as it was.
 To keep the data somewhere else, set `AGENT_JOBS_HOME` before the first start.
 
+### Selling it: licence keys
+
+`python tools/make_licence.py --make-key` once (keep `licence-key.private`
+secret; `licence-key.pub` ships with the app). From then on a copy without a
+key runs on the free tier in `agent/tiers.json`, and
+`python tools/make_licence.py --name "A Buyer" --email a@b.c --days 365`
+prints a key the buyer pastes under *Engines → Licence*. Keys are checked on
+their computer; nothing is sent anywhere. Until you make a key pair, every
+copy is fully unlocked.
+
 ### Checks
 
 ```
@@ -214,4 +268,5 @@ python tools/check_layout.py  # the window, measured in a real browser
 python tools/check_helper.py  # the in-form helper, in a real browser
 python tools/check_answers.py # typed answers saved and reused, in a real browser
 python tools/check_navigator.py # a whole application on an awkward site, in a real browser
+python tools/live_check.py --all # LIVE: your boards, your engine, a test email to yourself, your inbox
 ```

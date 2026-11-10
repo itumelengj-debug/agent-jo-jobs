@@ -184,6 +184,14 @@ def tick_schedules() -> dict:
 
 def start_scheduler() -> None:
     import threading
+    # a cycle schedule left with no next run (the old autopilot button made
+    # those) is never due; put it right before the loop starts looking
+    try:
+        if jobscout.repair_schedule(get_memory(), scheduler):
+            print("Agent Jo Jobs: the scheduled run had no next run and would never "
+                  "have started; it's repaired.")
+    except Exception as exc:
+        print(f"Agent Jo Jobs: couldn't check the scheduled run: {type(exc).__name__}: {exc}")
     t = threading.Thread(target=_run_due_schedules, daemon=True)
     t.start()
 
@@ -278,6 +286,20 @@ class JobsAutoBody(BaseModel):
     # many steps (agent/navigator.py)
     explore: bool | None = None
     explore_turns: int | None = None
+    # how much a run gets through: forms per run, new roles per run, and
+    # engine calls at once (agent/jobscout.py LIMITS)
+    portal_per_run: int | None = None
+    discover_per_run: int | None = None
+    engine_workers: int | None = None
+    min_quality: int | None = None
+    # ghost jobs and scams (agent/trust.py), and the CV that goes with each
+    skip_ghosts: bool | None = None
+    ghost_bar: int | None = None
+    attach_cv: bool | None = None
+    tailor_cv: bool | None = None
+    auto_follow_up: bool | None = None
+    read_adverts: bool | None = None
+    follow_up_after_days: int | None = None
 
 
 @app.post("/api/jobs/auto")
@@ -285,6 +307,16 @@ def jobs_auto(body: JobsAutoBody):
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     if "explore_turns" in patch:
         patch["explore_turns"] = max(0, min(40, int(patch["explore_turns"])))
+    for k, top in jobscout.LIMITS.items():
+        if k in patch:
+            low = 1 if k in ("discover_per_run", "engine_workers") else 0
+            patch[k] = max(low, min(top, int(patch[k])))
+    if "min_quality" in patch:
+        patch["min_quality"] = max(0, min(100, int(patch["min_quality"])))
+    if "follow_up_after_days" in patch:
+        patch["follow_up_after_days"] = max(2, min(30, int(patch["follow_up_after_days"])))
+    if "ghost_bar" in patch:
+        patch["ghost_bar"] = max(30, min(100, int(patch["ghost_bar"])))
     return {"auto": jobscout.save_auto_config(patch)}
 
 
@@ -1244,21 +1276,20 @@ def jobs_autopilot():
     cfg = jobscout.auto_config()
     jobscout.save_auto_config({**cfg, "enabled": True,
                                "dry_run": cfg.get("dry_run", True)})
-    existing = [s2 for s2 in memory.list_schedules()
-                if (s2.get("action") or "") == "jobscout"]
-    if existing:
-        for s2 in existing:
-            memory.set_schedule_enabled(s2["id"], True)
-        return {"ok": True, "created": False,
-                "note": "The daily run was already set up; it's enabled."}
-    memory.create_schedule(
-        name="Job scout — daily", prompt="find and apply", spec_json="{}",
-        action="jobscout", payload="{}")
-    return {"ok": True, "created": True,
-            "dry_run": jobscout.auto_config().get("dry_run", True),
-            "note": ("It will find, de-duplicate, screen, score, draft and "
-                     "apply once a day. Rehearsal is on, so nothing is sent "
-                     "until you turn it off.")}
+    # This made a schedule of its own with no time and no next run, so it was
+    # never due: "Set up the daily loop" set up nothing. It goes through the
+    # same schedule-maker as the Daily switch now.
+    mem = get_memory()
+    existed = jobscout.schedule_enabled(mem)
+    on = jobscout.set_schedule(mem, scheduler, True)
+    info = jobscout.schedule_info(mem)
+    dry = jobscout.auto_config().get("dry_run", True)
+    return {"ok": on, "created": not existed, "dry_run": dry, "schedule": info,
+            "note": ((f"It was already set up; it runs {info['says']}." if existed else
+                      f"It will find, de-duplicate, screen, score, draft and apply "
+                      f"{info['says']}.")
+                     + (" Rehearsal is on, so nothing is sent until you turn it off."
+                        if dry else ""))}
 
 
 @app.post("/api/jobs/prune")
@@ -1400,14 +1431,20 @@ def jobs_list():
                            days_listed=round(jobscout.days_listed(r)),
                            bucket=jobscout.role_state(r, _cfg)["bucket"],
                            state_why=jobscout.role_state(r, _cfg)["why"],
-                           must_missing=jobscout.must_haves_missing(r))
+                           must_missing=jobscout.must_haves_missing(r),
+                           # roles found by a search or added by hand have
+                           # no reading yet; it's free, so it's done here
+                           **({} if r.get("trust") else
+                              (lambda t: {"trust": t, "salary": r.get("salary") or t.get("salary", "")})(
+                                  jobscout.check_trust(r))))
                       for r in jobscout.roles()],
             "profile": jobscout.profile(),
             "auto": jobscout.auto_config(),
             "summary": jobscout.summary(),
             "follow_ups": jobscout.follow_ups(),
             "interviews": _interviews.upcoming(jobscout.roles()),
-            "daily": jobscout.schedule_enabled(memory)}
+            "daily": jobscout.schedule_enabled(get_memory()),
+            "schedule": jobscout.schedule_info(get_memory())}
 
 
 # --- when the interview is, and a calendar file for it (agent/interviews.py) #
@@ -1610,6 +1647,87 @@ def jobs_cv_file(body: CvFileBody):
                                      engine=body.engine))
 
 
+class AutopilotBody(BaseModel):
+    text: str = ""            # the CV pasted…
+    name: str = ""
+    data: str = ""            # …or uploaded (base64 of the file's bytes)
+    engine: str = ""
+    every_hours: int = 4
+
+
+@app.post("/api/jobs/autopilot/setup")
+def jobs_autopilot_setup(body: AutopilotBody):
+    """From a CV to a running job search, in one action (agent/autopilot.py)."""
+    import agent.autopilot as autopilot
+    text = body.text
+    if body.data and not text.strip():
+        import base64
+        try:
+            raw = base64.b64decode(body.data.split(",", 1)[-1], validate=False)
+        except Exception:
+            raise HTTPException(status_code=400, detail="That file didn't arrive whole.")
+        if len(raw) > 15 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="That file is over 15 MB.")
+        got = cvstore.extract_text(body.name, raw)
+        if not got.get("ok"):
+            raise HTTPException(status_code=400, detail=got["error"])
+        text = got["text"]
+    model, why = _trend_model(body.engine or "")
+    brain = None if why else get_brain_or_none()
+    every = body.every_hours if body.every_hours in jobscout.EVERY_HOURS else 4
+    res = autopilot.setup(text, body.name, brain=brain, model=model, memory=get_memory(),
+                          scheduler=scheduler, every_hours=every)
+    if why:
+        res.setdefault("needs", []).insert(0, {"what": "An AI engine", "where": "engines", "why": why})
+    return res
+
+
+class LicenceBody(BaseModel):
+    key: str = ""
+
+
+@app.get("/api/licence")
+def licence_get():
+    import agent.license as lic
+    return lic.status()
+
+
+@app.post("/api/licence")
+def licence_set(body: LicenceBody):
+    import agent.license as lic
+    r = lic.activate(body.key) if body.key.strip() else lic.deactivate()
+    if r.get("ok") is False:
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+class AutostartBody(BaseModel):
+    on: bool
+
+
+@app.get("/api/autostart")
+def autostart_get():
+    import agent.autostart as autostart
+    return autostart.status()
+
+
+@app.post("/api/autostart")
+def autostart_set(body: AutostartBody):
+    import agent.autostart as autostart
+    r = autostart.enable() if body.on else autostart.disable()
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+@app.get("/api/jobs/autopilot/status")
+def jobs_autopilot_status():
+    import agent.autopilot as autopilot
+    import agent.autostart as autostart
+    import agent.license as lic
+    return {**autopilot.status(get_memory()), "autostart": autostart.status(), "licence": lic.status()}
+
+
 @app.delete("/api/jobs/cvtext")
 def jobs_cv_clear():
     return cvstore.clear()
@@ -1735,12 +1853,18 @@ def jobs_stage(body: JobsStageBody):
 
 class JobsDailyBody(BaseModel):
     enabled: bool
+    # 0 = once a day at 07:00; else every this many hours (jobscout.EVERY_HOURS)
+    every_hours: int | None = None
 
 
 @app.post("/api/jobs/schedule")
 def jobs_schedule(body: JobsDailyBody):
-    return {"daily": jobscout.set_schedule(memory, scheduler,
-                                           bool(body.enabled))}
+    if body.every_hours is not None and body.every_hours not in jobscout.EVERY_HOURS:
+        raise HTTPException(status_code=400,
+                            detail=f"every_hours must be one of {list(jobscout.EVERY_HOURS)}")
+    mem = get_memory()
+    on = jobscout.set_schedule(mem, scheduler, bool(body.enabled), body.every_hours)
+    return {"daily": on, "schedule": jobscout.schedule_info(mem)}
 
 
 
