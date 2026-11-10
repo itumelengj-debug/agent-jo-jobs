@@ -1086,3 +1086,105 @@ packages and checked the app loads. `./start.sh` served the window in a
 second, with this release's defaults (25 a day, ghost and scam screening,
 a CV on every email, follow-ups, adverts read in full). Build stamp
 2026-11-02.
+
+### 40. Tested against the real world, and rebuilt where it failed
+
+Asked for: make it autonomous, and software people would pay for. For the
+first time it was run against the real job boards and a real AI engine
+(DeepSeek). Mail went to a test server on the same machine and company forms
+were off, so nothing reached an employer. It read 1,497 live roles and kept
+32, nearly all title-only links from one site. Each cause is fixed, and the
+same search now keeps 178 relevant roles.
+
+- **Plain "Remote" was read as a region that excluded you.** Anyone who had
+  said where they can work lost every role on We Work Remotely, RemoteOK and
+  Jobicy. "EMEA" excluded someone in South Africa. "Remote, US" and "Remote,
+  South Korea" were kept, and "Lausanne" was the USA because the letters
+  are in it. `agent/geo.py` knows the places: countries and their other
+  names, the groupings adverts use (EMEA, APAC, LATAM, DACH, the EU), US
+  states, Canadian provinces and the cities that turn up most. A skipped
+  role's reason is a sentence: "open only to people in Canada, United
+  States". An unfamiliar town on a remote role is kept for the fit score to
+  judge.
+- **Feeds lost the company and the advert.** A picture tag wiped the
+  description it shares a name with, and the tags boards use for the
+  company, the region, the pay and the closing date weren't read. We Work
+  Remotely says who each role is open to ("Anywhere in the World", "USA
+  Only"); that is now used.
+- **Boards read from the data they publish**, searched for your own job
+  titles where they allow it: Himalayas (over 100,000 remote roles, each
+  with the countries it is open to), PNet (3,264 results for "data engineer";
+  the old reader returned its menu), Jobicy, Working Nomads, Arbeitnow and
+  Hacker News' monthly hiring thread. Each is asked no more often than its
+  own terms allow; the answer is kept until then.
+- **"Application addresses" were the small print.** The first address in
+  an advert was taken as where to apply. On live adverts that was the
+  disability-accommodations mailbox, the data-protection officer, or where
+  to report a fake recruiter, most of them called careers@ or recruiting@.
+  An address is now used only when the advert asks for applications at it.
+  Across 335 live adverts on the remote boards none did; on Hacker News 12
+  of 35 roles do.
+- **The real engine scored a senior data engineer 62 for senior data
+  engineer roles**, and called a degree and a tool missing that were on the
+  CV. The scorer now sees the CV, and has a scale: 70 and over is worth
+  applying, a tool from another vendor is a near-match, a different
+  discipline or an unmet hard requirement scores low. The same 24 live
+  roles went from 2 clearing the bar to 11, and the wrong jobs stayed at
+  the bottom. The default bar is 70.
+- **Adverts that rule you out are skipped for free**: "must be based in
+  the United States", "right to work in the UK", "no visa sponsorship" for
+  a role somewhere you can't work. 21 of 473 live adverts said so, some of
+  them listed as "Anywhere in the World".
+- A job title is matched by what it means ("Senior Engineer, Data Platform"
+  is a data engineer; "Business Intelligence Developer" is a BI developer),
+  sources take turns so one large board can't fill a run, and text boards
+  serve garbled ("MÃ¼nchen") is put right.
+- Checks: 22 new, on fixtures cut from the live responses.
+
+### 41. Autopilot: give it your CV
+
+Eight steps across five screens stood between installing and the first role.
+*Overview → Start Autopilot* does them from a CV, pasted or uploaded, and
+says what it did at each: reads the CV, builds the profile, works out five
+to eight job titles to search for (the one you hold, the step up, the other
+names the work goes by), sets where you can work (remote, and the country
+you live in), finds boards that suit you and checks each one answers,
+switches on a run every four hours, and starts the first. What only you can
+supply is listed. Nothing is sent by it: the level stays where you set it
+and a new install stays in rehearsal.
+
+Run live from a CV alone: set up in 47 seconds, eight titles, eight boards;
+the first run found 94 roles and drafted 47 applications, every one clean on
+the claims check (19 after one repair), 43 with a CV tailored to the advert.
+
+The Overview now opens with one answer: whether Autopilot is running, when
+it runs next, what the last run did, applications sent, replies, interviews,
+and anything waiting for you.
+
+### 42. It starts with the computer
+
+Autopilot only ran while the app was open. *Overview → Start with this
+computer* starts it quietly when you sign in (no window, no console) on
+Windows, macOS and Linux, by writing one small file where each system looks
+and removing exactly that file when switched off. A run missed while the
+computer was off happens at the next start.
+
+### 43. Licence keys
+
+A free tier with limits and a paid tier a key unlocks (`agent/license.py`).
+A key is a signed statement of who it is for, which tier and until when,
+checked on the buyer's computer against `licence-key.pub`: no account, no
+server, nothing sent. What each tier allows is in `agent/tiers.json` for you
+to edit. As shipped: Free is 5 applications a day, one run a day, forms
+filled but not submitted, no follow-ups or tailored CVs; Pro is everything.
+
+- `python tools/make_licence.py --make-key` once, then
+  `--name "A Buyer" --email a@b.c --days 365` prints a key. The buyer pastes
+  it under *Engines → Licence*.
+- **Until you make a key pair, every copy is fully unlocked**, yours
+  included. Limits begin with the first release that carries
+  `licence-key.pub`.
+- The private key is never packaged or committed. An expired key drops to
+  the free limits and touches no data.
+- Checks: 13 new `autopilot.*`, `autostart.*`, `licence.*` (841 pass); the
+  window suite and the real-browser layout and navigator checks pass.

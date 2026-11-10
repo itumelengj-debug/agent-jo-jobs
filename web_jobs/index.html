@@ -69,6 +69,29 @@
         <div class="syn-mark" aria-hidden="true"><img src="/static/icons/icon-192.png?v=green1" alt="" width="64" height="64" /></div>
       </header>
 
+      <article class="card ap-card" id="apCard">
+        <div class="ap-head">
+          <span class="ap-dot" id="apDot"></span>
+          <h3 id="apSays">Autopilot</h3>
+          <button class="btn ghost" id="apToggle" hidden></button>
+        </div>
+        <p class="muted" id="apWhen"></p>
+        <div class="ap-nums" id="apNums"></div>
+        <div id="apNeeds"></div>
+        <div id="apSetup" hidden>
+          <p>Give it your CV and it does the rest: builds your profile, works out which
+            jobs to look for, finds boards that suit you, and starts looking. Nothing is
+            sent until you say so.</p>
+          <textarea id="apCv" class="input" rows="5" placeholder="Paste your CV here, or choose a file below"></textarea>
+          <div class="actions">
+            <input type="file" id="apFile" accept=".pdf,.docx,.doc,.txt,.md" />
+            <button class="btn primary" id="apGo">Start Autopilot</button>
+          </div>
+        </div>
+        <div id="apSteps"></div>
+        <label class="toggle" id="apBootRow" hidden><input type="checkbox" id="apBoot" /><span>Start with this computer, quietly, so it runs without the window open</span></label>
+      </article>
+
       <div id="onboard"></div>
 
       <div class="bar" id="ovActions">
@@ -336,6 +359,16 @@
           provider — a key and a base URL — or point at a model on this machine,
           which costs nothing and sends nothing out.</p>
       </header>
+
+      <article class="card" id="licCard">
+        <h3>Licence</h3>
+        <p id="licSays" class="muted"></p>
+        <div class="actions" id="licForm">
+          <input id="licKey" class="input" placeholder="Paste your licence key (starts AJJ1.)" />
+          <button class="btn primary" id="licSave">Activate</button>
+          <button class="btn ghost" id="licRemove" hidden>Remove key</button>
+        </div>
+      </article>
 
       <article class="card">
         <h3>Add an engine</h3>

@@ -28,7 +28,7 @@ MANIFEST, SIGNATURE, PUBKEY = "MANIFEST.sha256", "MANIFEST.sig", "signing-key.pu
 KEYFILE = ROOT / "signing-key.private"
 SKIP_DIRS = {".git", ".venv", "venv", "env", "__pycache__", "dist", "build",
              ".update", ".github", "installer", "node_modules", ".pytest_cache"}
-SKIP_NAMES = {"signing-key.private", MANIFEST, SIGNATURE, "install.log",
+SKIP_NAMES = {"signing-key.private", "licence-key.private", MANIFEST, SIGNATURE, "install.log",
               "install-report.json"}
 SKIP_SUFFIX = {".pyc", ".pyo", ".log", ".db", ".sqlite", ".zip"}
 LEAK = [(re.compile(rb"sk-ant-[A-Za-z0-9_\-]{10,}"), "an Anthropic API key"),

@@ -39,6 +39,15 @@ replies shape the tone of the next ones. And it learns which boards reply,
 whether your fit score predicts anything, and whether email beats a portal.
 Every rate carries the range it could really be.
 
+## Autopilot
+
+Open it, paste or upload your CV on the Overview, and press **Start
+Autopilot**. It builds your profile, works out which job titles to search
+for, finds boards that suit you, and runs every four hours. Tick **Start
+with this computer** and it runs whether or not the window is open. It
+starts in rehearsal: it drafts and prepares, and sends nothing until you
+choose a level under Auto-apply.
+
 ## Install
 
 Windows — double-click **`install.bat`**. It finds or installs Python, sets
@@ -239,6 +248,16 @@ across from Agent Jo's folder (`~/.local_agent`): roles, profile and CVs,
 auto-apply settings, the browser logins for job sites, your engines and their
 keys, and the daily run. It only copies; Agent Jo's folder is left as it was.
 To keep the data somewhere else, set `AGENT_JOBS_HOME` before the first start.
+
+### Selling it: licence keys
+
+`python tools/make_licence.py --make-key` once (keep `licence-key.private`
+secret; `licence-key.pub` ships with the app). From then on a copy without a
+key runs on the free tier in `agent/tiers.json`, and
+`python tools/make_licence.py --name "A Buyer" --email a@b.c --days 365`
+prints a key the buyer pastes under *Engines → Licence*. Keys are checked on
+their computer; nothing is sent anywhere. Until you make a key pair, every
+copy is fully unlocked.
 
 ### Checks
 

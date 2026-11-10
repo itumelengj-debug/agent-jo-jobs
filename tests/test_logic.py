@@ -3613,6 +3613,125 @@ def _auto_apply_checks() -> None:
                   and "70-84" in J._SCORE_SYSTEM and "CV_EXCERPTS" in J._SCORE_SYSTEM)
         section("auto.live", live)
 
+        # --- Autopilot, starting with the computer, and licence keys -------- #
+        def autopilot_checks():
+            import agent.autopilot as AP, agent.autostart as AS, agent.license as LIC
+            import agent.scheduler as _sch, agent.boards as BD, agent.cvstore as CVS
+            _axc.AGENT_HOME = Path(_axt.mkdtemp(prefix="ap-"))
+            _axc.DB_PATH = _axc.AGENT_HOME / "a.db"
+            m = _RMS(db_path=_axc.AGENT_HOME / "s.db", check_same_thread=False)
+            CV = ("Thandi Mokoena\nSenior Data Engineer\nJohannesburg, South Africa\n\n"
+                  "EXPERIENCE\nSenior Data Engineer — Blue Crane Bank (2021 – present)\n"
+                  "- Rebuilt the nightly load in Python and SQL.\n"
+                  "BI Developer — Karoo Analytics (2016 – 2018)\n- Built Power BI dashboards.\n")
+
+            class Eng:
+                def chat(self, msgs, system, tools=None, **kw):
+                    sysx = " ".join(system) if isinstance(system, list) else str(system)
+                    if "which job titles" in sysx:
+                        return blk(json.dumps({"target_roles": ["Data Engineer", "BI Developer"],
+                                               "education": ["BSc Computer Science, Wits, 2015"],
+                                               "country": "South Africa"}))
+                    return blk(json.dumps({"full_name": "Thandi Mokoena", "location": "Johannesburg, South Africa",
+                                           "summary": "Data engineer.", "skills": ["Python", "SQL"],
+                                           "employers": ["Blue Crane Bank"]}))
+            was_add, was_start = BD.auto_add, J.start_run
+            started = []
+            BD.auto_add = lambda p, limit=5: (J.add_job_source("B1", "https://b1.test/feed", "rss"),
+                                              {"ok": True, "added": [{"name": "B1"}], "rejected": []})[1]
+            J.start_run = lambda kind, brain, model=None, finish=None: (started.append(kind) or {"ok": True})
+            try:
+                r = AP.setup(CV, "cv.txt", brain=Eng(), memory=m, scheduler=_sch, every_hours=4)
+                p = J.profile()
+                check("autopilot.a_cv_becomes_a_running_job_search",
+                      r["ok"] and r["ready"] and started == ["cycle"]
+                      and p["target_roles"] == ["Data Engineer", "BI Developer"]
+                      and p["locations_ok"] == ["Remote", "South Africa"] and p["education"]
+                      and J.schedule_enabled(m) and J.schedule_info(m)["every_hours"] == 4
+                      and J.auto_config()["enabled"] and J.auto_config()["dry_run"] is True
+                      and all(st["ok"] for st in r["steps"]), f"{r['steps']}")
+                check("autopilot.it_says_what_only_you_can_supply",
+                      any("email" in n["what"].lower() or "contact" in n["what"].lower() for n in r["needs"]))
+                _axc.AGENT_HOME = Path(_axt.mkdtemp(prefix="ap2-"))
+                r2 = AP.setup(CV, "cv.txt", brain=None, memory=m, scheduler=_sch, start=True)
+                check("autopilot.without_an_engine_it_reads_titles_off_the_cv_and_says_so",
+                      "Data Engineer" in J.profile()["target_roles"] and not r2["ready"]
+                      and any(n["where"] == "engines" for n in r2["needs"]), f"{J.profile()['target_roles']}")
+                st = AP.status(m)
+                check("autopilot.status_is_one_plain_answer",
+                      isinstance(st["says"], str) and "hours_saved" in st and "needs_you" in st)
+            finally:
+                BD.auto_add, J.start_run = was_add, was_start
+
+            win = AS._content("win32"); mac = AS._content("darwin"); lin = AS._content("linux")
+            check("autostart.each_system_gets_a_quiet_start_of_this_copy",
+                  "--no-browser" in win and "WScript.Shell" in win and ", 0, False" in win
+                  and "RunAtLoad" in mac and "--no-browser" in mac
+                  and "Terminal=false" in lin and "run_jobs.py" in lin
+                  and str(AS._target("win32", Path("/h"))).endswith(".vbs")
+                  and "LaunchAgents" in str(AS._target("darwin", Path("/h"))))
+            import os as _os
+            old_x = _os.environ.get("XDG_CONFIG_HOME")
+            _os.environ["XDG_CONFIG_HOME"] = str(_axc.AGENT_HOME / "xdg")
+            try:
+                if not sys.platform.startswith(("win", "darwin")):
+                    on = AS.enable(); off = AS.disable()
+                    check("autostart.on_writes_one_file_and_off_removes_it",
+                          on["ok"] and on["on"] and Path(on["path"]).name == "agent-jo-jobs.desktop"
+                          and off["ok"] and not off["on"] and not Path(on["path"]).exists())
+            finally:
+                if old_x is None:
+                    _os.environ.pop("XDG_CONFIG_HOME", None)
+                else:
+                    _os.environ["XDG_CONFIG_HOME"] = old_x
+
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+            k = ed25519.Ed25519PrivateKey.generate()
+            priv = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                   serialization.NoEncryption())
+            pub = k.public_key().public_bytes(serialization.Encoding.PEM,
+                                              serialization.PublicFormat.SubjectPublicKeyInfo)
+            key = LIC.issue(priv, "Thandi Mokoena", "t@example.com", "pro", 30)
+            other = ed25519.Ed25519PrivateKey.generate().private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+            check("licence.a_key_is_read_only_if_the_seller_signed_it",
+                  LIC.read(key, pub)["ok"] and LIC.read(key, pub)["tier"] == "pro"
+                  and not LIC.read(key[:-4] + "AAAA", pub)["ok"]
+                  and not LIC.read(LIC.issue(other, "X"), pub)["ok"]
+                  and not LIC.read("hello", pub)["ok"])
+            from datetime import datetime as _dt, timezone as _tz
+            check("licence.an_expired_key_says_so",
+                  LIC.read(LIC.issue(priv, "X", days=1, now=_dt(2020, 1, 1, tzinfo=_tz.utc)), pub).get("expired"))
+            check("licence.a_copy_with_no_public_key_is_fully_unlocked",
+                  not LIC.enforced() and LIC.status()["tier"] == "pro" and LIC.limit("daily_cap") is None
+                  and LIC.allows("submit_forms") and LIC.schedule_ok(2))
+            was_pub = LIC.PUBKEY
+            LIC.PUBKEY = _axc.AGENT_HOME / "licence-key.pub"
+            LIC.PUBKEY.write_bytes(pub)
+            try:
+                free = LIC.status()
+                check("licence.without_a_key_the_free_limits_apply",
+                      free["tier"] == "free" and LIC.limit("daily_cap") == 5 and not LIC.allows("submit_forms")
+                      and LIC.schedule_ok(0) and not LIC.schedule_ok(4))
+                fresh(settled=True, daily_cap=50)
+                LIC.PUBKEY = _axc.AGENT_HOME / "licence-key.pub"; LIC.PUBKEY.write_bytes(pub)
+                for i in range(8):
+                    role(f"Capped {i}", fit=90, email=f"c{i}@c.test", draft=dict(CLEAN))
+                out = J.auto_apply(None)
+                check("licence.the_free_tier_sends_five_a_day", len(out["sent"]) == 5
+                      and any("daily cap of 5" in h["reason"] for h in out["held"]), f"{len(out['sent'])}")
+                act = LIC.activate(key)
+                check("licence.a_key_lifts_them", act.get("ok") and LIC.status()["tier"] == "pro"
+                      and LIC.limit("daily_cap") is None and LIC.schedule_ok(4))
+                LIC.deactivate()
+            finally:
+                LIC.PUBKEY = was_pub
+            check("licence.the_private_key_never_ships",
+                  '"licence-key.private"' in (ROOT / "tools" / "make_release.py").read_text("utf-8")
+                  and "*.private" in (ROOT / ".gitignore").read_text("utf-8"))
+        section("auto.autopilot", autopilot_checks)
+
         # --- one run at a time, in the background --------------------------- #
         def runs():
             fresh()

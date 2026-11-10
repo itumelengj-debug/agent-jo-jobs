@@ -77,6 +77,10 @@ const tick = () => new Promise((r) => realSetTimeout(r, 0));
 
 // the server's real payload shapes, as observed from the running app
 const PAYLOAD = {
+  "/api/jobs/autopilot/status": { on: true, says: "Autopilot is running. Nothing needs you.", set_up: true,
+    profile_ready: true, schedule: { on: true, says: "every 4 hours" }, last_run: {}, needs_you: [],
+    held: 0, sent: 0, tracked: 2, autostart: { on: false }, licence: { enforced: false } },
+  "/api/licence": { enforced: false, says: "Every feature is unlocked in this copy." },
   "/api/updates": {build: "2026-10-06 21:00 UTC", source: "", can_verify: false, can_roll_back: false, last_install: {}},
   "/api/jobs/digest": {settings: {enabled: false, to: "t@x.com", weekday: 0}, days: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], preview: {subject: "s", text: "t", empty: false}},
   "/api/jobs/inbox": {settings: {enabled: false, imap_host: ""}, folder: "/x/replies", mail_ready: true, imap_guess: "imap.gmail.com", recent: [{kind: "interview", role: "BI Lead", company: "Zeta", subject: "Interview", at: "2026-10-05"}]},

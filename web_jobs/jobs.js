@@ -207,6 +207,7 @@ const STAGES = [
 ];
 
 LOADERS.overview = async function () {
+  drawAutopilot();
   try { S.profileReady = !!(await api("/api/meta")).profile_ready; }
   catch (e) { /* keep the last answer */ }
   const now = new Date();
@@ -2179,6 +2180,7 @@ function engSay(msg, kind) {
 }
 
 LOADERS.engines = async function () {
+  drawLicence();
   drawUpdates();
   drawPhone();
   drawBackups();
@@ -3626,3 +3628,110 @@ LOADERS.auto = async function () {
 
 document.addEventListener("DOMContentLoaded", wireRemaining);
 if (document.readyState !== "loading") setTimeout(wireRemaining, 0);
+
+/* --- Autopilot: is it running, what did it do, what needs you ------------- */
+async function drawAutopilot(stepsFromSetup) {
+  const card = $("#apCard");
+  if (!card) return;
+  let st;
+  try { st = await api("/api/jobs/autopilot/status", undefined, "GET"); }
+  catch (e) { card.hidden = true; return; }
+  card.hidden = false;
+  $("#apSays").textContent = st.running ? "Autopilot is working now…" : st.says;
+  const needs = (st.needs_you || []).length + (st.held || 0);
+  $("#apDot").className = "ap-dot" + (st.on ? (needs ? " warn" : " on") : "");
+  const sc = st.schedule || {};
+  const when = (t) => t ? new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const bits = [];
+  if (st.on && sc.next_run) bits.push(`Next run ${when(sc.next_run)} (${sc.says}).`);
+  if ((st.last_run || {}).summary) bits.push(`Last run: ${st.last_run.summary}.`);
+  if (st.on && st.rehearsal) bits.push("Rehearsal is on: it drafts and prepares, and sends nothing.");
+  if ((st.licence || {}).enforced && st.licence.tier === "free") bits.push(st.licence.says);
+  $("#apWhen").textContent = bits.join(" ");
+  const nums = $("#apNums"); nums.innerHTML = "";
+  if (st.set_up || st.tracked) {
+    [[st.sent, "applications sent"], [st.sent_today, "today"], [st.replies, "replies"],
+     [st.interviews, "interviews"], [st.tracked, "roles tracked"],
+     [st.hours_saved, "hours of applying saved"]].forEach(([n, label]) => {
+      const d = el("div", "ap-num"); d.append(el("b", "", String(n ?? 0)), el("span", "", label)); nums.appendChild(d);
+    });
+  }
+  const host = $("#apNeeds"); host.innerHTML = "";
+  (st.needs_you || []).slice(0, 5).forEach((n) => {
+    const row = el("div", "ap-need");
+    row.append(el("b", "", "Needs you"), el("span", "", `${n.title}${n.company ? " at " + n.company : ""}: ${n.why}`));
+    row.addEventListener("click", () => show("roles"));
+    host.appendChild(row);
+  });
+  if (st.held) {
+    const row = el("div", "ap-need");
+    row.append(el("b", "", "Needs you"), el("span", "", `${st.held} draft(s) say something your profile can't support. Look under Drafts.`));
+    row.addEventListener("click", () => show("drafts"));
+    host.appendChild(row);
+  }
+  $("#apSetup").hidden = !!st.set_up && st.profile_ready;
+  const tg = $("#apToggle");
+  tg.hidden = !st.set_up;
+  tg.textContent = st.on ? "Pause" : "Resume";
+  tg.onclick = async () => {
+    try {
+      await api("/api/jobs/auto", { enabled: !st.on });
+      await api("/api/jobs/schedule", { enabled: !st.on });
+      toast(st.on ? "Autopilot paused. Nothing runs until you resume it." : "Autopilot resumed.");
+    } catch (err) { toast(err.message, "bad"); }
+    drawAutopilot(); railCounts();
+  };
+  const boot = st.autostart || {};
+  $("#apBootRow").hidden = !st.set_up;
+  $("#apBoot").checked = !!boot.on;
+  $("#apBootRow").title = boot.says || "";
+  if (stepsFromSetup) {
+    const sh = $("#apSteps"); sh.innerHTML = "";
+    (stepsFromSetup.steps || []).forEach((x) => sh.appendChild(el("div", "ap-step" + (x.ok ? "" : " bad"), `${x.ok ? "✓" : "!"} ${x.what}: ${x.detail}`)));
+    (stepsFromSetup.needs || []).forEach((x) => {
+      const d = el("div", "ap-step bad", `Still needed — ${x.what}. ${x.why}`);
+      d.addEventListener("click", () => show(x.where)); d.style.cursor = "pointer"; sh.appendChild(d);
+    });
+  }
+}
+
+async function startAutopilot(btn) {
+  await busy(btn, "Setting up… about a minute", async () => {
+    const body = { text: $("#apCv").value };
+    const f = $("#apFile").files[0];
+    if (!body.text.trim() && f) {
+      body.name = f.name;
+      body.data = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); });
+    }
+    if (!body.text.trim() && !body.data) { toast("Paste your CV or choose a file first.", "warn"); return; }
+    const res = await api("/api/jobs/autopilot/setup", body);
+    toast(res.ready ? "Autopilot is set up and looking for roles." : "Set up as far as it could. See what's still needed.", res.ready ? "" : "warn");
+    await refresh(); railCounts(); drawAutopilot(res);
+  });
+}
+
+async function drawLicence() {
+  const says = $("#licSays");
+  if (!says) return;
+  let st;
+  try { st = await api("/api/licence", undefined, "GET"); } catch (e) { return; }
+  says.textContent = st.says;
+  $("#licForm").hidden = !st.enforced;
+  $("#licRemove").hidden = !(st.enforced && st.tier !== "free");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const go = $("#apGo"); if (go) go.addEventListener("click", (e) => startAutopilot(e.target));
+  const boot = $("#apBoot");
+  if (boot) boot.addEventListener("change", async (e) => {
+    try { const r = await api("/api/autostart", { on: e.target.checked }); toast(r.says); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message, "bad"); }
+  });
+  const ls = $("#licSave");
+  if (ls) ls.addEventListener("click", (e) => busy(e.target, "Checking…", async () => {
+    const r = await api("/api/licence", { key: $("#licKey").value });
+    $("#licKey").value = ""; toast(r.says); drawLicence(); drawAutopilot();
+  }));
+  const lr = $("#licRemove");
+  if (lr) lr.addEventListener("click", async () => { await api("/api/licence", { key: "" }); drawLicence(); drawAutopilot(); });
+});

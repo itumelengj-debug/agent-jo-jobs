@@ -1647,6 +1647,87 @@ def jobs_cv_file(body: CvFileBody):
                                      engine=body.engine))
 
 
+class AutopilotBody(BaseModel):
+    text: str = ""            # the CV pasted…
+    name: str = ""
+    data: str = ""            # …or uploaded (base64 of the file's bytes)
+    engine: str = ""
+    every_hours: int = 4
+
+
+@app.post("/api/jobs/autopilot/setup")
+def jobs_autopilot_setup(body: AutopilotBody):
+    """From a CV to a running job search, in one action (agent/autopilot.py)."""
+    import agent.autopilot as autopilot
+    text = body.text
+    if body.data and not text.strip():
+        import base64
+        try:
+            raw = base64.b64decode(body.data.split(",", 1)[-1], validate=False)
+        except Exception:
+            raise HTTPException(status_code=400, detail="That file didn't arrive whole.")
+        if len(raw) > 15 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="That file is over 15 MB.")
+        got = cvstore.extract_text(body.name, raw)
+        if not got.get("ok"):
+            raise HTTPException(status_code=400, detail=got["error"])
+        text = got["text"]
+    model, why = _trend_model(body.engine or "")
+    brain = None if why else get_brain_or_none()
+    every = body.every_hours if body.every_hours in jobscout.EVERY_HOURS else 4
+    res = autopilot.setup(text, body.name, brain=brain, model=model, memory=get_memory(),
+                          scheduler=scheduler, every_hours=every)
+    if why:
+        res.setdefault("needs", []).insert(0, {"what": "An AI engine", "where": "engines", "why": why})
+    return res
+
+
+class LicenceBody(BaseModel):
+    key: str = ""
+
+
+@app.get("/api/licence")
+def licence_get():
+    import agent.license as lic
+    return lic.status()
+
+
+@app.post("/api/licence")
+def licence_set(body: LicenceBody):
+    import agent.license as lic
+    r = lic.activate(body.key) if body.key.strip() else lic.deactivate()
+    if r.get("ok") is False:
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+class AutostartBody(BaseModel):
+    on: bool
+
+
+@app.get("/api/autostart")
+def autostart_get():
+    import agent.autostart as autostart
+    return autostart.status()
+
+
+@app.post("/api/autostart")
+def autostart_set(body: AutostartBody):
+    import agent.autostart as autostart
+    r = autostart.enable() if body.on else autostart.disable()
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r["error"])
+    return r
+
+
+@app.get("/api/jobs/autopilot/status")
+def jobs_autopilot_status():
+    import agent.autopilot as autopilot
+    import agent.autostart as autostart
+    import agent.license as lic
+    return {**autopilot.status(get_memory()), "autostart": autostart.status(), "licence": lic.status()}
+
+
 @app.delete("/api/jobs/cvtext")
 def jobs_cv_clear():
     return cvstore.clear()

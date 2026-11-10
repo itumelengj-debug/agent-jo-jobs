@@ -78,6 +78,9 @@ DEFAULT_PROFILE = {
     "employers": [],
     "achievements": [],
     "certifications": [],
+    # degrees and diplomas, as your CV states them: adverts ask, and a
+    # letter may say so
+    "education": [],
     "years_experience": {},
     # Empty by default. These used to hold the author's own targets — Data
     # Engineer, BI Consultant, remote contract, South Africa — which was
@@ -394,6 +397,8 @@ def _profile_corpus(p: dict, role: dict | None = None) -> str:
             " ".join(_as_list(p.get("employers"))),
             " ".join(_as_list(p.get("achievements"))),
             " ".join(_as_list(p.get("certifications"))),
+            " ".join(_as_list(p.get("education"))),
+            " ".join(_as_list(p.get("target_roles"))),
             json.dumps(p.get("years_experience") or {})]
     # the pasted CV is yours too: a tool or employer named there may be
     # claimed (agent/cvstore.py)
@@ -1445,6 +1450,19 @@ def _auto_apply(brain, model, limit, cfg) -> dict:
     sent, held, errors, prepared = [], [], [], []
     cap = int(cfg.get("daily_cap", 25))
     portal_room = max(0, int(cfg.get("portal_per_run", 15) or 0))
+    # what the licence tier allows (agent/license.py); unlimited when this
+    # copy carries no licence key to check against
+    try:
+        from . import license as _lic
+        tier_cap = _lic.limit("daily_cap")
+        if tier_cap is not None:
+            cap = min(cap, int(tier_cap))
+        if not _lic.allows("submit_forms") and mode == "submit":
+            mode = "prepare"
+        if not _lic.allows("tailored_cv"):
+            cfg = {**cfg, "tailor_cv": False}
+    except Exception:
+        pass
     settle = settling_in(cfg)
     if settle["on"]:
         cap, portal_room = min(cap, SETTLE_CAP), min(portal_room, SETTLE_CAP)
@@ -1907,6 +1925,15 @@ def set_schedule(memory, scheduler, enabled: bool,
         cfg["every_hours"] = every_hours
         save_config(cfg)
     n = schedule_every_hours()
+    try:
+        from . import license as _lic
+        if n and not _lic.schedule_ok(n):
+            n = 0                      # the free tier runs once a day
+            cfg = load_config()
+            cfg["every_hours"] = 0
+            save_config(cfg)
+    except Exception:
+        pass
     mine = _our_schedule(memory)
     if enabled:
         spec = _spec_for(scheduler, n)
@@ -3269,6 +3296,12 @@ def send_follow_ups(brain, model=None, cfg: dict | None = None) -> dict:
     out = {"sent": [], "drafted": [], "held": [], "errors": []}
     if not cfg.get("auto_follow_up", True) or not cfg.get("enabled"):
         return out
+    try:
+        from . import license as _lic
+        if not _lic.allows("follow_ups"):
+            return out
+    except Exception:
+        pass
     live = (not cfg.get("dry_run", True)) and cfg.get("deliver", True)
     days = max(2, int(cfg.get("follow_up_after_days", 7) or 7))
     room = max(0, int(cfg.get("follow_ups_per_run", 10) or 0))
