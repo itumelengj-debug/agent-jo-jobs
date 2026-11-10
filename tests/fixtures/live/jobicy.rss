@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:wfw="http://wellformedweb.org/CommentAPI/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/" xmlns:slash="http://purl.org/rss/1.0/modules/slash/" xmlns:media="http://search.yahoo.com/mrss/" xmlns:job_listing="https://jobicy.com"
+ >
+
+<channel>
+	<title>Jobicy's Feed</title>
+	<atom:link href="https://jobicy.com/feed/job_feed?job_categories=data-science" rel="self" type="application/rss+xml" />
+	<link>https://jobicy.com</link>
+	<description>Jobicy</description>
+	<lastBuildDate>Tue, 10 Nov 2026 10:44:05 +0000</lastBuildDate>
+	<language>en-US</language>
+	<legalNotice>We appreciate your use of Jobicy Feeds in your projects. Job listings are published on Jobicy first and become available through our public API, RSS, and XML distribution channels after a short delay. This publication window helps preserve Jobicy as the original source, allows time for corrections or removals before wider redistribution, and reduces the spread of duplicate or outdated listing data across third-party services. Accessing the feeds a few times daily is sufficient for most integrations, and excessive querying may result in temporary access restrictions.</legalNotice>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	
+	<item>
+		<title>Director of Research, Text-to-Speech</title>
+		<id>161053</id>
+		<link>https://jobicy.com/jobs/161053-director-of-research-text-to-speech</link>
+		<pubDate>Tue, 10 Nov 2026 10:44:05 +0000</pubDate>
+		<guid isPermaLink="false">https://jobicy.com/jobs/161053-director-of-research-text-to-speech</guid>
+
+		<description><![CDATA[Company Overview Deepgram is bringing the world’s most natural interface, voice, to the technology we use every day. Our speech models and real-time infrastructure power AI systems that keep up...]]></description>
+
+<content:encoded><![CDATA[<h3><strong>Company Overview</strong></h3> <p><a href="https://jobicy.com/company/deepgram" target="_blank" rel="noopener">Deepgram</a> is bringing the world’s most natural interface, voice, to the technology we use every day. Our speech models and real-time infrastructure power AI systems that keep up with the way people actually speak. More than 5,000 organizations run conversational voice AI on Deepgram in production, including Twilio, Cloudflare, Sierra, Decagon, Vapi, Cresta, Granola, and Jack in the Box.</p> <p>The Deepgram Voice Agent Platform brings together speech-to-text, text-to-speech and speech-to-speech, with voice-native foundation models available through cloud APIs or self-hosted and on-premises deployments. Built for accuracy, low latency and cost efficiency, Deepgram makes high-quality voice experiences practical to build and run at scale. More than 650,000 developers ]]></content:encoded>
+
+<media:content url="https://jobicy.com/data/server-nyc0409/galaxy/mercury/2020/12/WRILS-201212160008-406229.jpg" medium="image" />
+				
+		<job_listing:location><![CDATA[USA]]></job_listing:location>
+<job_listing:job_type><![CDATA[Full Time]]></job_listing:job_type>
+<job_listing:category><![CDATA[Data Science & Analytics]]></job_listing:category>
+<job_listing:company><![CDATA[Deepgram]]></job_listing:company>
+<job_listing:salary_min>288000</job_listing:salary_min>
+<job_listing:salary_max>361000</job_listing:salary_max>
+<job_listing:salary_currency>USD</job_listing:salary_currency>
+<job_listing:salary_period>yearly</job_listing:salary_period>
+	</item>
+<item>
+		<title>Applied Scientist</title>
+		<id>161042</id>
+		<link>https://jobicy.com/jobs/161042-applied-scientist-3</link>
+		<pubDate>Tue, 10 Nov 2026 09:11:49 +0000</pubDate>
+		<guid isPermaLink="false">https://jobicy.com/jobs/161042-applied-scientist-3</guid>
+
+		<description><![CDATA[About Upstart At Upstart, we’re united by a mission that matters: to radically reduce the cost and complexity of borrowing for all Americans. Every day, we bring creativity, experimentation, and...]]></description>
+
+<content:encoded><![CDATA[<p><strong>About <a href="https://jobicy.com/company/upstart" target="_blank" rel="noopener">Upstart</a></strong></p> <p>At Upstart, we’re united by a mission that matters: to radically reduce the cost and complexity of borrowing for all Americans. Every day, we bring creativity, experimentation, and advanced AI to reshape access to credit, helping millions move forward financially with clarity and confidence.</p> <p>As the leading AI lending marketplace, we partner with banks and credit unions to expand access to affordable credit through technology that’s both radically intelligent and deeply human. Our platform runs over one million predictions per borrower using more than 3,000 signals, powering smarter, fairer decisions for millions of customers. But the numbers only hint at the impact. Every idea, every voice, and every contribution moves us closer to a world where credit never sta]]></content:encoded>
+
+<media:content url="https://jobicy.com/data/server-nyc0409/galaxy/mercury/2025/06/bc2cfa2b-221-1.jpeg" medium="image" />
+				
+		<job_listing:location><![CDATA[USA]]></job_listing:location>
+<job_listing:job_type><![CDATA[Full Time]]></job_listing:job_type>
+<job_listing:category><![CDATA[Data Science & Analytics]]></job_listing:category>
+<job_listing:company><![CDATA[Upstart]]></job_listing:company>
+<job_listing:salary_min>141500</job_listing:salary_min>
+<job_listing:salary_max>196000</job_listing:salary_max>
+<job_listing:salary_currency>USD</job_listing:salary_currency>
+<job_listing:salary_period>yearly</job_listing:salary_period>
+	</item>
+<item>
+		<title>Applied Scientist</title>
+		<id>161034</id>
+		<link>https://jobicy.com/jobs/161034-applied-scientist-2</link>
+		<pubDate>Tue, 10 Nov 2026 09:11:18 +0000</pubDate>
+		<guid isPermaLink="false">https://jobicy.com/jobs/161034-applied-scientist-2</guid>
+
+		<description><![CDATA[About Quilter At Quilter, we are helping electrical engineers save time and accomplish more by automating the tedious and time-consuming task of designing printed circuit boards (PCBs). Our small team...]]></description>
+
+<content:encoded><![CDATA[<h3>About <a href="https://jobicy.com/company/quilter" target="_blank" rel="noopener">Quilter</a></h3> <p>At Quilter, we are helping electrical engineers save time and accomplish more by automating the tedious and time-consuming task of designing printed circuit boards (PCBs). Our small team is composed of experts in electrical engineering, electromagnetic simulation, ML/AI, and high-performance computing (HPC). We are inventing and leveraging novel techniques to solve the decades-old problem of automating circuit board design where today hundreds of billions of dollars are spent. We have raised $25 million in Series B funding from some of the very best and are charging full-speed toward our goal.</p> <p>No matter where we come from, we’re united by a common vision for the future and a core set of values we think will get us there:</p> <ol> <li> <p>Curiosity</p> </li> <li> <p>Conviction<]]></content:encoded>
+
+<media:content url="https://jobicy.com/data/server-nyc0409/galaxy/mercury/2025/08/138e7ef9-221.png" medium="image" />
+				
+		<job_listing:location><![CDATA[USA]]></job_listing:location>
+<job_listing:job_type><![CDATA[Full Time]]></job_listing:job_type>
+<job_listing:category><![CDATA[Data Science & Analytics]]></job_listing:category>
+<job_listing:company><![CDATA[Quilter]]></job_listing:company>
+<job_listing:salary_min>180000</job_listing:salary_min>
+<job_listing:salary_max>200000</job_listing:salary_max>
+<job_listing:salary_currency>USD</job_listing:salary_currency>
+<job_listing:salary_period>yearly</job_listing:salary_period>
+	</item>
+</channel></rss>

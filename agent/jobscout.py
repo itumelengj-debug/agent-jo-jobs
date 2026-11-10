@@ -264,6 +264,15 @@ def add_roles(found: list) -> dict:
             "apply_email": _as_text(f.get("apply_email")
                                     or f.get("email"))[:200],
             "found_at": _iso(), "posted_at": _posted(f.get("posted_at")),
+            # what the board itself said: remote or not, the countries a
+            # remote role is open to, the country a one-country board serves,
+            # when the advert closes, what it pays
+            **({"remote": True} if f.get("remote") else {}),
+            **({"countries": [str(c)[:40] for c in f["countries"]][:250]}
+               if isinstance(f.get("countries"), (list, tuple)) and f.get("countries") else {}),
+            **({"country": _as_text(f.get("country"))[:2].upper()} if f.get("country") else {}),
+            **({"closes_at": _posted(f.get("closes_at"))} if _posted(f.get("closes_at")) else {}),
+            **({"salary": _as_text(f.get("salary"))[:60]} if f.get("salary") else {}),
             "stage": "found",
             "fit": None, "draft": None, "events": [],
         })
@@ -457,14 +466,31 @@ def check_draft(text: str, role: dict | None = None) -> dict:
 #  scoring + drafting (engine-backed, strictly grounded)
 # --------------------------------------------------------------------------- #
 _SCORE_SYSTEM = (
-    "You assess how well ONE candidate fits ONE role. Be blunt and useful, "
-    "not encouraging. Return ONLY raw JSON: {\"score\": 0-100, \"verdict\": "
+    "You assess how well ONE candidate fits ONE role, to decide whether applying "
+    "is worth their time. Be honest and useful, not encouraging and not harsh.\n"
+    "Read PROFILE and CV_EXCERPTS together: both are the candidate's. Before you "
+    "call anything missing, check both. Never list as missing a tool, a "
+    "qualification or experience that appears in either.\n"
+    "The score answers: should this person apply?\n"
+    "  85-100  meets nearly every core requirement; a strong application.\n"
+    "  70-84   meets most core requirements; gaps are learnable or are the same "
+    "kind of tool from another vendor. Worth applying.\n"
+    "  50-69   a stretch: a core requirement is genuinely absent (the main "
+    "discipline, the seniority, a must-have domain).\n"
+    "  0-49    a different job, or a hard requirement they cannot meet.\n"
+    "Judge as a hiring manager would. Equivalent tools count as near-matches, "
+    "not as gaps: Azure for AWS or GCP, Databricks or Synapse for Snowflake or "
+    "BigQuery, Power BI for Tableau or Looker, one orchestrator or SQL database "
+    "for another. A long list of 'nice to have' tools is not a list of "
+    "requirements. Seniority one level either side is not a mismatch. Score "
+    "low when the discipline differs, when years or level are far off, when "
+    "the advert requires a location, language or right to work they lack, or "
+    "when a must-have has no equivalent in their background.\n"
+    "Return ONLY raw JSON: {\"score\": 0-100, \"verdict\": "
     "\"strong\"|\"possible\"|\"weak\", \"for\": [reasons this fits], "
-    "\"against\": [honest reasons it may not — gaps, seniority mismatch, "
-    "domain mismatch, red flags in the advert], \"missing\": [requirements "
-    "the candidate does NOT demonstrably meet]}. If the candidate plainly "
-    "doesn't meet the core requirement, say so with a low score — a padded "
-    "score wastes their time.")
+    "\"against\": [honest reasons it may not], \"missing\": [requirements "
+    "the candidate does NOT demonstrably meet, after checking PROFILE and "
+    "CV_EXCERPTS]}.")
 
 _DRAFT_SYSTEM = (
     "You draft a short application message for a candidate, in THEIR voice.\n"
@@ -556,7 +582,17 @@ def score_role(key: str, brain, model=None) -> dict:
     ok, why = profile_ready()
     if not ok:
         return {"ok": False, "error": why}
-    payload = json.dumps({"profile": profile(), "role": r}, default=str)[:12000]
+    # the CV too: scored on the short profile alone, a real engine reported a
+    # degree and a tool as missing that were on the CV all along
+    try:
+        from . import cvstore
+        cv = cvstore.excerpts(f"{r.get('title', '')} {r.get('description') or r.get('summary', '')}"[:1500],
+                              k=5, limit=3500)
+    except Exception:
+        cv = ""
+    slim = {k: r.get(k) for k in ("title", "company", "location", "salary", "summary", "description")
+            if r.get(k)}
+    payload = json.dumps({"PROFILE": profile(), "CV_EXCERPTS": cv, "ROLE": slim}, default=str)[:16000]
     try:
         data = _engine_json(brain, payload, _SCORE_SYSTEM, model)
     except Exception as exc:
@@ -765,7 +801,7 @@ AUTO_DEFAULTS = {
     "dry_run": True,        # starts in rehearsal: prepares and logs, sends
                             # nothing, so you can read a week of what it WOULD
                             # have sent before trusting it with your name
-    "min_score": 75,        # below this it waits for you
+    "min_score": 70,        # below this it waits for you (70 = "worth applying" on the scoring scale)
     # a draft with unsourced claims never auto-sends
     "require_clean_check": True,
     # what to do with adverts that have no email address — most of them.
@@ -1690,6 +1726,9 @@ def describe_run(r: dict) -> str:
         bits.append(f"{r.get('discovered') or 0} new role(s) found")
     if r.get("scams_skipped"):
         bits.append(f"{r['scams_skipped']} advert(s) that look like scams set aside")
+    if r.get("not_eligible"):
+        bits.append(f"{r['not_eligible']} skipped because the advert rules you out "
+                    f"(where you must live, or no visa sponsorship)")
     if r.get("ghosts_skipped"):
         bits.append(f"{r['ghosts_skipped']} likely ghost job(s) skipped")
     if r.get("replies"):
@@ -2160,9 +2199,44 @@ def _explain_fetch_error(err: str, url: str = "") -> str:
 _EMAIL_IN_TEXT = re.compile(
     r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 # addresses that exist on a page but are not where an application goes
-_NOT_APPLY = ("noreply", "no-reply", "donotreply", "support@", "privacy@",
+_NOT_APPLY = ("noreply", "no-reply", "donotreply", "privacy@",
               "legal@", "abuse@", "sentry", "example.com", "@remoteok",
-              "@remotive", "@weworkremotely")
+              "@remotive", "@weworkremotely", "@jobicy", "@himalayas", "@workingnomads",
+              "@jobspresso", "@pnet.co.za", "@ycombinator")
+# Mailboxes that are never for applications, whatever the sentence says…
+_NEVER_LOCAL = re.compile(
+    r"^(?:no-?reply|do-?not-?reply|donotreply|privacy|dpo|global-?dpo|gdpr|dataprotection|"
+    r"legal|compliance|security|abuse|fraud|phishing|press|media|pr|billing|accounts?|sales|"
+    r"unsubscribe|webmaster|postmaster|mailer-daemon|feedback|ethics|eeo|investors?|ir|"
+    r".*accommodat\w*|.*accessib\w*|ada(?:request)?|.*disabilit\w*|benefits)$")
+# …and ones that usually are
+_APPLY_LOCAL = re.compile(
+    r"^(?:jobs?|careers?|hiring|hire|hr|recruit\w*|talent\w*|apply|applications?|cvs?|resumes?|"
+    r"work|join(?:us)?|people|vacanc\w+|opportunit\w+|humanresources|staffing)(?:[._+-]\w+)?$")
+# the advert asking for an application at the address that follows
+_APPLY_ASK = re.compile(
+    r"\b(?:to apply\b|apply(?:ing)?\s*(?:by|via|at|to|through|:|–|—|-)|apply\s+(?:now\s+)?(?:by\s+)?(?:e-?mail(?:ing)?|"
+    r"sending|writing)|applications?\s+(?:to|at|via|by e-?mail|should be (?:sent|e-?mailed))|"
+    r"(?:send|e-?mail|forward|submit|drop|shoot)\s+(?:us\s+|me\s+|in\s+|over\s+|through\s+)?(?:your|a|an|the)\s+"
+    r"(?:\w+\s+){0,3}?(?:cv|c\.v\.|résumé|resume|application|cover letter|portfolio|profile|details)|"
+    r"(?:cv|c\.v\.|résumé|resume)s?\s+(?:and\s+\w+\s+(?:\w+\s+)?)?(?:to|at|via)\b|"
+    r"interested\b\??[^.!?]{0,60}?\b(?:e-?mail|contact|write|reach out|get in touch|send)|"
+    r"(?:e-?mail|write to|reach out to|get in touch with|contact)\s+(?:us|me)\s+(?:directly\s+)?(?:at|on|via)\b[^.!?]{0,30}?"
+    r"\b(?:apply|application|cv|résumé|resume)|how to apply)", re.I)
+# the sentence being about something else: an adjustment, a question, a report
+_OTHER_ASK = re.compile(
+    r"\b(?:accommodat\w+|disabilit\w+|accessib\w+|reasonable adjustments?|adjustments? to|medical condition|"
+    r"assistance|privacy|data protection|personal data|your data|gdpr|exercise (?:these|your) rights|"
+    r"automated decision\w*|affirmative action|equal opportunity|eeo|suspicious|fraud\w*|scam\w*|phishing|"
+    r"legitimate|claiming to be|impersonat\w+|report(?:ed|ing)?\b|complaints?|grievance|concerns?|"
+    r"questions?|quer(?:y|ies)|enquir(?:y|ies)|inquir(?:y|ies)|more information|additional information|"
+    r"further information|support completing|technical (?:issues?|difficult\w+|problems?)|trouble\b|"
+    r"alternative selection|unsubscribe|press|media)\b", re.I)
+# "Email careers@…", "contact us at jobs@…": told to write, with nothing else said
+_WRITE_TO = re.compile(
+    r"(?:\be-?mail|\bcontact|\bwrite(?: to)?|\breach(?: out)?(?: to)?|\bget in touch(?: with)?|\bping|"
+    r"\bsend (?:an? )?(?:e-?mail|note|message) to)\s*(?:us|me)?\s*(?:directly)?\s*(?:at|on|via)?\s*[:\-–—]?\s*$",
+    re.I)
 
 
 def _apply_email(text: str) -> str:
@@ -2170,17 +2244,105 @@ def _apply_email(text: str) -> str:
 
     Being wrong here is expensive in both directions: a missed address means a
     role that could have been applied to automatically isn't, and a wrong one
-    sends your application to a mailing list."""
-    for m in _EMAIL_IN_TEXT.finditer(text or ""):
-        addr = m.group(0).lower()
+    sends your application where it has no business.
+
+    It took the first address in the advert that wasn't on a short blocklist.
+    Against live adverts that was, again and again, the address in the small
+    print: the mailbox for disability accommodations, the data-protection
+    officer, where to report a fake recruiter, who to ask for the
+    affirmative-action plan. Most of those are called careers@ or
+    recruiting@, so the name of a mailbox proves nothing by itself.
+
+    An address is believed only when the advert asks for applications at it:
+      * its own sentence says so ("Apply: …", "send your CV to …",
+        "interested? reach out to …") and is not about something else; or
+      * the advert simply says to write to a mailbox that exists for
+        applications ("Email careers@…"), with no talk of accommodations,
+        questions or reports anywhere near it."""
+    text = str(text or "")
+    best, best_score = "", 0
+    for m in _EMAIL_IN_TEXT.finditer(text):
+        addr = m.group(0).lower().rstrip(".-")
         if any(bad in addr for bad in _NOT_APPLY):
             continue
-        return addr
-    return ""
+        local = addr.split("@", 1)[0]
+        if _NEVER_LOCAL.match(local):
+            continue
+        before = text[max(0, m.start() - 260):m.start()]
+        # the sentence the address is in, not the ones before it
+        cut = max(before.rfind(". "), before.rfind("! "), before.rfind("? "), before.rfind(" • "))
+        sentence = before[cut + 2:] if cut >= 0 else before
+        after = re.split(r"[.!?]\s", text[m.end():m.end() + 60])[0]
+        if _OTHER_ASK.search(sentence):
+            continue                       # this sentence is about something else
+        score = 0
+        if _APPLY_ASK.search(sentence) or _APPLY_ASK.search(before[-70:]):
+            score = 4
+        elif _APPLY_ASK.search(after) and not _OTHER_ASK.search(before):
+            score = 3                      # "jobs@acme.io — apply by email"
+        elif _WRITE_TO.search(sentence) and _APPLY_LOCAL.match(local) \
+                and not _OTHER_ASK.search(before):
+            score = 2
+        if score and _APPLY_LOCAL.match(local):
+            score += 1
+        if score > best_score:
+            best, best_score = addr, score
+    return best
 
 
 def _strip_html(s: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s or "")).strip()
+    """Text of a piece of HTML: tags out, entities read (&amp;, &#8217;),
+    and text a board decoded with the wrong alphabet put right. Adverts went
+    into letters with "&amp;" and "donâ€™t" still in them."""
+    import html as _html
+    from . import geo
+    t = s or ""
+    if "mailto:" in t:
+        # the address inside an "Apply here" link is the application address,
+        # and it went out with the tag
+        t = re.sub(r"""<a\b[^>]*href=["']mailto:([^"'?>\s]+)[^>]*>(.*?)</a>""",
+                   lambda m: (m.group(2) if m.group(1).lower() in m.group(2).lower()
+                              else f"{m.group(2)} {m.group(1)} "), t, flags=re.I | re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    if "&" in t:
+        t = _html.unescape(t)
+        if "<" in t and re.search(r"<[a-zA-Z/][^>]*>", t):   # markup that was escaped twice
+            t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", geo.fix_text(t)).strip()
+
+
+# Boards that list only remote work. A role from one is remote whatever its
+# location field says; that field is where you may live.
+_REMOTE_BOARDS = ("weworkremotely.com", "remoteok.com", "remotive.com", "jobicy.com",
+                  "jobspresso.co", "workingnomads.com", "himalayas.app", "euremotejobs.com",
+                  "remote.co", "nodesk.co", "dynamitejobs.com", "justremote.co", "4dayweek.io")
+
+
+def _host(url: str) -> str:
+    return re.sub(r"^https?://(www\.)?([^/:?#]+).*$", r"\2", str(url or "").strip().lower())
+
+
+def _remote_board(url: str) -> bool:
+    h = _host(url)
+    return any(h == b or h.endswith("." + b) for b in _REMOTE_BOARDS)
+
+
+def _money(lo, hi, cur="", per="") -> str:
+    """"USD 90,000–120,000 per year" from a board's pay fields; '' without any."""
+    def f(n):
+        try:
+            n = float(n)
+        except Exception:
+            return ""
+        return f"{n:,.0f}" if n > 0 else ""
+    a, b = f(lo), f(hi)
+    span = f"{a}–{b}" if a and b and a != b else (a or b)
+    if not span:
+        return ""
+    per = {"annual": "per year", "yearly": "per year", "year": "per year", "monthly": "per month",
+           "month": "per month", "hourly": "per hour", "hour": "per hour", "weekly": "per week",
+           "week": "per week", "daily": "per day", "day": "per day"}.get(str(per or "").lower(), "")
+    return " ".join(x for x in (str(cur or "").upper(), span, per) if x)
 
 
 def _clean_location(loc: str) -> str:
@@ -2232,7 +2394,8 @@ def _parse_remotive(text: str) -> list:
                     "url": j.get("url", ""),
                     "location": _clean_location(j.get("candidate_required_location", "Remote")),
                     "summary": body[:600], "description": body[:ADVERT_CHARS],
-                    "apply_email": _apply_email(body),
+                    "apply_email": _apply_email(body), "remote": True,
+                    "salary": _as_text(j.get("salary"))[:60],
                     "posted_at": _posted(j.get("publication_date")),
                     "source": "Remotive"})
     return out
@@ -2250,43 +2413,96 @@ def _parse_remoteok(text: str) -> list:
                     "url": j.get("url", ""),
                     "location": _clean_location(j.get("location") or "Remote"),
                     "summary": body[:600], "description": body[:ADVERT_CHARS],
-                    "apply_email": _apply_email(body),
+                    "apply_email": _apply_email(body), "remote": True,
+                    "salary": _money(j.get("salary_min"), j.get("salary_max"), "USD", "year"),
                     "posted_at": _posted(j.get("date") or j.get("epoch")),
                     "source": "RemoteOK"})
     return out
 
 
+def _xml_name(tag) -> tuple:
+    """(namespace, local name) of an XML tag, both lower case."""
+    t = str(tag)
+    if t.startswith("{"):
+        ns, _, name = t[1:].partition("}")
+        return ns.lower(), name.lower()
+    return "", t.lower()
+
+
 def _parse_jobs_rss(text: str) -> list:
+    """Any RSS or Atom feed of jobs.
+
+    Job boards put the useful facts in tags of their own, and this read none
+    of them: the company (job_listing:company), where a remote role is open
+    to (We Work Remotely's <region>: "Anywhere in the World", "USA Only"),
+    the whole advert (content:encoded), the pay, the closing date. Worse, a
+    picture tag (media:content) that follows the description shares its name
+    and wiped it. Against the live feeds that left Jobicy and Jobspresso with
+    no company and no advert text, and every We Work Remotely role with the
+    one word "Remote"."""
     from xml.etree import ElementTree as ET
     out = []
     try:
         root = ET.fromstring(text)
     except Exception:
         return out
+    feed_remote = _remote_board(_CURRENT_SOURCE_URL.get("url") or "")
     for item in root.iter():
-        if item.tag.split("}")[-1].lower() not in ("item", "entry"):
+        if _xml_name(item.tag)[1] not in ("item", "entry"):
             continue
-        title = link = body = when = ""
+        f = {"title": "", "link": "", "body": "", "full": "", "company": "", "location": "",
+             "region": "", "when": "", "closes": "", "salary": "", "lo": "", "hi": "",
+             "cur": "", "per": ""}
         for c in item:
-            tag = c.tag.split("}")[-1].lower()
+            ns, tag = _xml_name(c.tag)
+            txt = (c.text or "").strip()
+            if "mrss" in ns or "/media" in ns:
+                continue                      # a picture, not the advert
             if tag == "title":
-                title = (c.text or "").strip()
+                f["title"] = f["title"] or txt
             elif tag == "link":
-                link = (c.get("href") or c.text or "").strip()
+                f["link"] = f["link"] or (c.get("href") or txt).strip()
+            elif tag == "encoded":
+                f["full"] = _strip_html(txt)
             elif tag in ("description", "summary", "content"):
-                body = _strip_html(c.text or "")
-            elif tag in ("pubdate", "published", "updated", "date") and not when:
-                when = _posted(c.text or "")
+                if txt and not f["body"]:
+                    f["body"] = _strip_html(txt)
+            elif tag in ("pubdate", "published", "updated", "date"):
+                f["when"] = f["when"] or _posted(txt)
+            elif tag in ("expires_at", "expires", "expirationdate", "valid_through"):
+                f["closes"] = _posted(txt)
+            elif tag == "company":
+                f["company"] = f["company"] or _strip_html(txt)
+            elif tag == "region":
+                f["region"] = f["region"] or _strip_html(txt)
+            elif tag == "location":
+                f["location"] = f["location"] or _strip_html(txt)
+            elif tag == "salary":
+                f["salary"] = _strip_html(txt)
+            elif tag == "salary_min":
+                f["lo"] = txt
+            elif tag == "salary_max":
+                f["hi"] = txt
+            elif tag == "salary_currency":
+                f["cur"] = txt
+            elif tag == "salary_period":
+                f["per"] = txt
+        title = _strip_html(f["title"])
         if not title:
             continue
-        company = ""
-        if ":" in title:                  # WWR uses "Company: Role"
+        company = f["company"]
+        if not company and ":" in title:  # WWR uses "Company: Role"
             company, title = [p.strip() for p in title.split(":", 1)]
-        out.append({"title": title, "company": company, "url": link,
-                    "location": "Remote", "summary": body[:600],
-                    "description": body[:ADVERT_CHARS],
+        body = f["full"] if len(f["full"]) > len(f["body"]) else f["body"]
+        remote = feed_remote or _remote_board(f["link"])
+        out.append({"title": title, "company": company, "url": f["link"],
+                    # what the feed says about where; "Remote" when it says nothing
+                    "location": _clean_location(f["region"] or f["location"]) or "Remote",
+                    "remote": remote,
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
                     "apply_email": _apply_email(body),
-                    "posted_at": when,
+                    "posted_at": f["when"], "closes_at": f["closes"],
+                    "salary": (f["salary"] or _money(f["lo"], f["hi"], f["cur"], f["per"]))[:60],
                     "source": "RSS"})
     return out
 
@@ -2561,13 +2777,218 @@ def _parse_personio(text: str) -> list:
     return out
 
 
+def _parse_himalayas(text: str) -> list:
+    """Himalayas' jobs API: remote roles, each with the countries it is open
+    to (an empty list is worldwide), its pay and its closing date."""
+    from . import geo
+    out = []
+    for j in (json.loads(text).get("jobs") or []):
+        if not isinstance(j, dict) or not j.get("title"):
+            continue
+        body = _strip_html(j.get("description") or j.get("excerpt") or "")
+        limits = [str(c) for c in (j.get("locationRestrictions") or []) if c]
+        codes = sorted(set().union(*[geo.read_place(c)["countries"] for c in limits])) if limits else []
+        where = ("Worldwide" if not limits else ", ".join(limits) if len(limits) <= 4
+                 else f"Remote ({len(limits)} countries)")
+        out.append({"title": _strip_html(j["title"]), "company": _strip_html(j.get("companyName") or ""),
+                    "url": j.get("guid") or j.get("applicationLink") or "",
+                    "location": where, "countries": codes or limits, "remote": True,
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
+                    "apply_email": _apply_email(body),
+                    "posted_at": _posted(j.get("pubDate")), "closes_at": _posted(j.get("expiryDate")),
+                    "salary": _money(j.get("minSalary"), j.get("maxSalary"), j.get("currency"),
+                                     j.get("salaryPeriod")),
+                    "source": "Himalayas"})
+    return out
+
+
+def _parse_workingnomads(text: str) -> list:
+    data = json.loads(text)
+    out = []
+    for j in (data if isinstance(data, list) else []):
+        if not isinstance(j, dict) or not j.get("title"):
+            continue
+        body = _strip_html(j.get("description") or "")
+        out.append({"title": _strip_html(j["title"]), "company": _strip_html(j.get("company_name") or ""),
+                    "url": j.get("url") or "",
+                    "location": _clean_location(_strip_html(j.get("location") or "")) or "Remote",
+                    "remote": True, "summary": body[:600], "description": body[:ADVERT_CHARS],
+                    "apply_email": _apply_email(body), "posted_at": _posted(j.get("pub_date")),
+                    "source": "Working Nomads"})
+    return out
+
+
+def _parse_jobicy(text: str) -> list:
+    """Jobicy's API (v2): the company, the regions a role is open to and the
+    whole advert, none of which its feed's first tags carry."""
+    out = []
+    for j in (json.loads(text).get("jobs") or []):
+        if not isinstance(j, dict) or not j.get("jobTitle"):
+            continue
+        body = _strip_html(j.get("jobDescription") or j.get("jobExcerpt") or "")
+        where = _clean_location(re.sub(r"\s{2,}", " ", _strip_html(str(j.get("jobGeo") or ""))))
+        out.append({"title": _strip_html(j["jobTitle"]), "company": _strip_html(j.get("companyName") or ""),
+                    "url": j.get("url") or "", "location": where or "Remote", "remote": True,
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
+                    "apply_email": _apply_email(body), "posted_at": _posted(j.get("pubDate")),
+                    "salary": _money(j.get("annualSalaryMin") or j.get("salaryMin"),
+                                     j.get("annualSalaryMax") or j.get("salaryMax"),
+                                     j.get("salaryCurrency"), j.get("salaryPeriod") or "year"),
+                    "source": "Jobicy"})
+    return out
+
+
+def _parse_arbeitnow(text: str) -> list:
+    """Arbeitnow's job board API: roles in Germany and around Europe, each
+    marked remote or not."""
+    out = []
+    for j in (json.loads(text).get("data") or []):
+        if not isinstance(j, dict) or not j.get("title"):
+            continue
+        body = _strip_html(j.get("description") or "")
+        out.append({"title": _strip_html(j["title"]), "company": _strip_html(j.get("company_name") or ""),
+                    "url": j.get("url") or "",
+                    "location": _clean_location(_strip_html(j.get("location") or "")),
+                    "remote": bool(j.get("remote")), "country": "DE",
+                    "summary": body[:600], "description": body[:ADVERT_CHARS],
+                    "apply_email": _apply_email(body), "posted_at": _posted(j.get("created_at")),
+                    "source": "Arbeitnow"})
+    return out
+
+
+_STEPSTONE_COUNTRY = {"pnet.co.za": "ZA", "stepstone.de": "DE", "stepstone.at": "AT",
+                      "stepstone.be": "BE", "stepstone.nl": "NL", "stepstone.fr": "FR",
+                      "totaljobs.com": "GB", "cwjobs.co.uk": "GB", "jobsite.co.uk": "GB",
+                      "irishjobs.ie": "IE", "jobs.ie": "IE", "nijobs.com": "GB"}
+
+
+def _parse_stepstone(text: str) -> list:
+    """A results page on PNet, or any board on the same platform (StepStone,
+    Totaljobs…): the page carries its results as data, with the company, the
+    town, the posting date and the date the advert closes. Reading the
+    links off the page instead produced its menu ("Johannesburg", "Cape
+    Town") and none of that."""
+    out = []
+    i = (text or "").find('__PRELOADED_STATE__["app-unifiedResultlist"]')
+    if i < 0:
+        return out
+    try:
+        state, _ = json.JSONDecoder().raw_decode(text, text.index("{", i))
+    except Exception:
+        return out
+    host = _host(_CURRENT_SOURCE_URL.get("url") or "")
+    country = next((c for h, c in _STEPSTONE_COUNTRY.items() if host.endswith(h)), "")
+    site = {"pnet.co.za": "PNet"}.get(host, host.split(".")[0].capitalize() if host else "StepStone")
+    for j in ((state.get("searchResults") or {}).get("items") or []):
+        if not isinstance(j, dict) or not j.get("title"):
+            continue
+        body = _strip_html(j.get("jobBenefitsHtml") or j.get("textSnippet") or "")
+        out.append({"title": _strip_html(j["title"]), "company": _strip_html(j.get("companyName") or ""),
+                    "url": j.get("url") or "",
+                    "location": _clean_location(_strip_html(j.get("location") or "")),
+                    "country": country, "remote": str(j.get("workFromHome")) == "2",
+                    "summary": _strip_html(j.get("textSnippet") or body)[:600],
+                    "description": body[:ADVERT_CHARS], "apply_email": _apply_email(body),
+                    "posted_at": _posted(j.get("datePosted")),
+                    "closes_at": _posted(j.get("publishToDate")),
+                    "salary": _strip_html(_as_text(j.get("salary")))[:60],
+                    "source": site})
+    return out
+
+
+_HN_ROLE = re.compile(
+    r"\b(engineers?|developers?|programmers?|scientists?|designers?|architects?|analysts?|"
+    r"researchers?|devops|sre|managers?|leads?|heads? of|directors?|specialists?|recruiters?|"
+    r"marketers?|writers?|consultants?|administrators?|technicians?|interns?|"
+    r"founding|full[- ]?stack|back[- ]?end|front[- ]?end)\b", re.I)
+_HN_HEAD = re.compile(
+    r"\b(engineers?|developers?|programmers?|scientists?|designers?|architects?|analysts?|"
+    r"researchers?|managers?|leads?|directors?|specialists?|recruiters?|marketers?|writers?|"
+    r"consultants?|administrators?|technicians?|interns?|devops|sre|mts|cto|heads? of \w+|"
+    r"founding \w+|officers?|representatives?|executives?|strategists?|advocates?)\b", re.I)
+_HN_NOT_ROLE = re.compile(
+    r"https?://|@|\$\s?\d|€\s?\d|£\s?\d|\d+k\b|\b(remote|onsite|on-site|hybrid|full[- ]?time|"
+    r"part[- ]?time|contract|equity|visa|salary|www\.)\b", re.I)
+_HN_WHERE = re.compile(r"\b(remote|onsite|on-site|on site|hybrid|worldwide|anywhere|in[- ]person)\b", re.I)
+
+
+def _hn_emails(text: str) -> str:
+    """Addresses written to dodge harvesters: "jobs [at] acme [dot] com"."""
+    t = re.sub(r"\s*(?:\[at\]|\(at\)|\{at\}|<at>)\s*", "@", text, flags=re.I)
+    t = re.sub(r"\s*(?:\[dot\]|\(dot\)|\{dot\}|<dot>)\s*", ".", t, flags=re.I)
+    return re.sub(r"\b([\w.+-]+) at ([\w-]+) dot (com|io|co|ai|org|net|dev|app)\b", r"\1@\2.\3", t, flags=re.I)
+
+
+def _parse_hn(text: str) -> list:
+    """Hacker News' monthly "Who is hiring?" thread. Each top-level comment is
+    one company's post, by convention "Company | Roles | Where | …" on its
+    first line. More than a third give an address to write to."""
+    import html as _html
+    from . import geo
+    data = json.loads(text)
+    story = str(data.get("story_id") or "")
+    out = []
+    for h in data.get("hits") or []:
+        if story and str(h.get("parent_id")) != story:
+            continue                      # a reply, not a post
+        raw = h.get("comment_text") or ""
+        paras = [_strip_html(x) for x in re.split(r"<p>|\n\n", raw) if _strip_html(x)]
+        if not paras or "|" not in paras[0]:
+            continue
+        segs = [x.strip() for x in paras[0].split("|") if x.strip()]
+        company = re.sub(r"\s*\(.*?\)\s*|https?://\S+", " ", segs[0]).strip(" -–:")[:80]
+        if not company or len(company) > 60:
+            continue
+        titles = []
+
+        def add(t):
+            t = re.sub(r"\s+", " ", t).strip(" .-–:")
+            if 4 <= len(t) <= 80 and t.lower() not in [x.lower() for x in titles]:
+                titles.append(t)
+        for seg in segs[1:]:
+            if not _HN_HEAD.search(seg) or _HN_NOT_ROLE.search(seg) or len(seg) > 140:
+                continue
+            # "Data Engineer, ML Engineer" is two roles; "Founding MTS,
+            # Full-Stack" is one. Split only where every piece is a role.
+            parts = [x.strip() for x in re.split(r",|;|\band\b|&|\+", seg) if x.strip()]
+            if len(parts) > 1 and all(_HN_HEAD.search(x) for x in parts):
+                for x in parts:
+                    add(x)
+            else:
+                add(seg)
+        if not titles:
+            # roles listed in the body, one to a line
+            for line in paras[1:12]:
+                line = line.strip(" -–•*·")
+                if 6 <= len(line) <= 70 and _HN_HEAD.search(line) and not _HN_NOT_ROLE.search(line) \
+                        and not line.endswith((".", ":", "?", "!")):
+                    add(line)
+        if not titles:
+            continue
+        where = [x for x in segs[1:] if _HN_WHERE.search(x) or geo.read_place(x)["countries"]]
+        where = [x for x in where if not re.search(r"https?://|\$|€|£", x)][:3]
+        body = _hn_emails(" ".join(paras))
+        link = f"https://news.ycombinator.com/item?id={h.get('objectID')}"
+        for t in titles[:4]:
+            out.append({"title": t, "company": company, "url": link,
+                        "location": _clean_location(", ".join(where))[:120],
+                        "summary": body[:600], "description": body[:ADVERT_CHARS],
+                        "apply_email": _apply_email(body),
+                        "posted_at": _posted(h.get("created_at")),
+                        "source": "Hacker News"})
+    return out
+
+
 _PARSERS = {"remotive": _parse_remotive, "remoteok": _parse_remoteok,
             "rss": _parse_jobs_rss, "html": _parse_html_kind,
             "browser": _parse_browser_kind, "greenhouse": _parse_greenhouse,
             "lever": _parse_lever, "ashby": _parse_ashby,
             "workable": _parse_workable, "smartrecruiters": _parse_smartrecruiters,
             "recruitee": _parse_recruitee, "workday": _parse_workday,
-            "bamboohr": _parse_bamboohr, "personio": _parse_personio}
+            "bamboohr": _parse_bamboohr, "personio": _parse_personio,
+            "himalayas": _parse_himalayas, "workingnomads": _parse_workingnomads,
+            "jobicy": _parse_jobicy, "arbeitnow": _parse_arbeitnow,
+            "stepstone": _parse_stepstone, "hn": _parse_hn}
 
 
 def _fetch_workday(url: str, pages: int = 3) -> str:
@@ -2600,7 +3021,28 @@ def fetch_for_kind(url: str, kind: str) -> str:
         return fetch_with_browser(url)
     if kind == "workday":
         return _fetch_workday(url)
+    if kind == "hn":
+        return _fetch_hn(url)
     return _fetch_source(url)
+
+
+def _fetch_hn(url: str) -> str:
+    """The newest "Who is hiring?" thread and every post in it, as one
+    document: the thread is found first, then its comments a page at a time."""
+    stories = json.loads(_fetch_source(url))
+    hit = next((h for h in (stories.get("hits") or [])
+                if "who is hiring" in str(h.get("title", "")).lower()), None)
+    if not hit:
+        return json.dumps({"hits": []})
+    sid, hits = str(hit.get("objectID")), []
+    for page in range(5):
+        d = json.loads(_fetch_source(
+            "https://hn.algolia.com/api/v1/search_by_date?tags=comment,story_"
+            f"{sid}&hitsPerPage=100&page={page}"))
+        hits += d.get("hits") or []
+        if page + 1 >= int(d.get("nbPages") or 1):
+            break
+    return json.dumps({"story_id": sid, "title": hit.get("title"), "hits": hits})
 
 
 def looks_like_html(text: str) -> bool:
@@ -2617,10 +3059,48 @@ def _matches_profile(job: dict, p: dict) -> bool:
     targets = [t.lower() for t in _as_list(p.get("target_roles"))]
     skills = [s.lower() for s in
               _as_list(p.get("skills")) + _as_list(p.get("technologies"))]
-    if targets and any(t and t in blob for t in targets):
+    if targets and any(t and (t in blob or _title_has(t, job.get("title", ""))) for t in targets):
         return True
-    hits = sum(1 for s in skills if s and s in blob)
+    # "R", "Go" and "C" are skills, and letters in every advert
+    hits = sum(1 for s in set(skills)
+               if s and re.search(rf"(?<![\w+#]){re.escape(s)}(?![\w+#])", blob))
     return hits >= 2
+
+
+_TITLE_NOISE = {"senior", "snr", "sr", "junior", "jnr", "jr", "lead", "principal", "staff", "mid",
+                "level", "the", "of", "and", "a", "an", "for", "in", "to", "ii", "iii", "i",
+                "remote", "contract", "permanent"}
+_TITLE_FAMILY = ("engineer", "develop", "analy", "scien", "manag", "architect", "admin", "design",
+                 "consult", "program", "test", "support", "market", "account", "operat", "secur",
+                 "recruit", "research", "special", "techn", "account", "financ", "writ", "sell",
+                 "sale", "lead", "direct", "coordinat", "assist", "teach", "train")
+_TITLE_SAME = {"bi": "business intelligence", "ml": "machine learning", "ai": "artificial intelligence",
+               "qa": "quality assurance", "sre": "site reliability", "ux": "user experience",
+               "dba": "database admin", "pm": "product manag", "dev": "develop",
+               "frontend": "front end", "backend": "back end", "fullstack": "full stack"}
+
+
+def _title_tokens(text: str) -> set:
+    t = re.sub(r"[-/]", " ", str(text or "").lower())
+    for short, long_ in _TITLE_SAME.items():
+        t = re.sub(rf"\b{short}\b", long_, t)
+    out = set()
+    for w in re.findall(r"[a-z0-9+#.]+", t):
+        w = w.strip(".")
+        if not w or w in _TITLE_NOISE:
+            continue
+        fam = next((f for f in _TITLE_FAMILY if w.startswith(f)), None)
+        out.add(fam or (w[:-1] if len(w) > 3 and w.endswith("s") else w))
+    return out
+
+
+def _title_has(term: str, title: str) -> bool:
+    """Does a job title say what a search term does, in whatever order and
+    form? "Data Engineer" is in "Senior Engineer, Data Platform" and "Data
+    Engineering Lead"; "BI Developer" is "Business Intelligence Developer".
+    Matching the exact phrase missed all three."""
+    want = _title_tokens(term)
+    return bool(want) and want <= _title_tokens(title)
 
 
 # The most each of the run's limits may be set to (jobs/server.py clamps to these)
@@ -2649,30 +3129,30 @@ def discover(limit: int | None = None) -> dict:
     # path was fixed.
     raw, errors, _raw_per = _fetch_all()
     found, per_source = [], {}
-    by_source = {}
+    skipped, skipped_detail = {}, {}
+    cfg = {**search_config(), "_use_profile_targets": True}
     for j in raw:
-        by_source.setdefault(j.get("source", "?"), []).append(j)
-    for name, jobs in by_source.items():
+        name = j.pop("_src", None) or j.get("source", "?")
+        per_source.setdefault(name, 0)
         try:
-            cfg = {**search_config(), "_use_profile_targets": True}
+            if not j.get("title"):
+                continue
+            ok, why = matches_search(j, cfg)
             # search terms, when set, are a deliberate instruction and beat
             # the looser profile guess
-            kept = []
-            for j in jobs:
-                if not j.get("title"):
-                    continue
-                ok, _ = matches_search(j, cfg)
-                if not ok:
-                    continue
-                if not (cfg.get("queries") or []) \
-                        and not _matches_profile(j, p):
-                    continue
-                kept.append(j)
-            per_source[name] = len(kept)
-            found.extend(kept)
+            if ok and not (cfg.get("queries") or []) and not _matches_profile(j, p):
+                ok, why = False, "not a match for your profile"
+            if not ok:
+                why = why.split(" \u201c")[0]
+                skipped[why] = skipped.get(why, 0) + 1
+                d = j.pop("_skip_detail", "")
+                if d and why == "region excludes you":
+                    skipped_detail[d] = skipped_detail.get(d, 0) + 1
+                continue
+            per_source[name] += 1
+            found.append(j)
         except Exception as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            per_source[name] = 0
     # the configured sources are the ones to report on: a role can carry a
     # source label of its own, which would otherwise appear as a seventh
     # "source" that nobody added
@@ -2686,6 +3166,25 @@ def discover(limit: int | None = None) -> dict:
                 [j for j in found if role_key(j) in have]
     except Exception:
         pass
+    # a turn each: taken in the order read, the first large board filled the
+    # run's room and the others never got a role in
+    try:
+        by, order = {}, []
+        for j in found:
+            k = j.get("source") or "?"
+            if k not in by:
+                by[k] = []
+                order.append(k)
+            by[k].append(j)
+        mixed = []
+        while any(by.values()):
+            for k in order:
+                if by[k]:
+                    mixed.append(by[k].pop(0))
+        new_first = [j for j in mixed if role_key(j) not in have]
+        found = new_first + [j for j in mixed if role_key(j) in have]
+    except Exception:
+        pass
     found = found[:max(1, int(limit))]
     res = add_roles(found)
     emails = sum(1 for j in found if j.get("apply_email"))
@@ -2693,6 +3192,11 @@ def discover(limit: int | None = None) -> dict:
                        f"{emails} have an application address")
     return {"ok": True, "added": res["added"], "matched": len(found),
             "with_email": emails, "per_source": per_source,
+            "read": len(raw),
+            # what was passed over, by reason, and for the commonest reason
+            # (a remote role open only to people elsewhere) where that was
+            "skipped": skipped,
+            "skipped_where": sorted(skipped_detail.items(), key=lambda x: -x[1])[:6],
             "errors": errors,
             "note": ("Roles without an application address are portal "
                      "applications — they're tracked, but only you can "
@@ -2915,6 +3419,20 @@ def auto_cycle(brain, model=None) -> dict:
         out["with_email"] = d.get("with_email", 0)
     except Exception as exc:
         out["errors"].append(f"discovery: {type(exc).__name__}: {exc}")
+    # an advert whose board gave a closing date, and it has passed: closed,
+    # before anything is read or spent on it
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        gone = 0
+        for r in roles():
+            if r.get("stage") in ("found", "drafted") and r.get("closes_at") \
+                    and str(r["closes_at"]) < today:
+                mark_closed(r["key"], f"the advert closed on {r['closes_at']}", expired=True)
+                gone += 1
+        if gone:
+            out["closed_by_date"] = gone
+    except Exception as exc:
+        out["errors"].append(f"closing dates: {type(exc).__name__}: {exc}")
     # read the advert itself where the board gave little more than a title,
     # so the screens, the score and the letter have the requirements to go on
     acfg = auto_config()
@@ -2924,7 +3442,7 @@ def auto_cycle(brain, model=None) -> dict:
             er = enrich_roles(limit=int(acfg.get("read_per_run", 40) or 0))
             out["adverts_read"] = er["read"]
             out["emails_found_in_adverts"] = er["emails"]
-            out["closed_by_date"] = er["closed"]
+            out["closed_by_date"] = int(out.get("closed_by_date") or 0) + er["closed"]
         except Exception as exc:
             out["errors"].append(f"reading adverts: {type(exc).__name__}: {exc}")
     # collapse the same vacancy found on several boards before spending
@@ -2938,6 +3456,7 @@ def auto_cycle(brain, model=None) -> dict:
     screened = 0
     p = profile()
     trust_out = {"scams": 0, "ghosts": 0}
+    _geo_cfg = dict(search_config())
     everyone = roles()
     for r in everyone:
         if r.get("stage") != "found" or (r.get("fit") or {}).get("score"):
@@ -2955,6 +3474,22 @@ def auto_cycle(brain, model=None) -> dict:
             trust_out["scams" if t["verdict"] == "scam" else "ghosts"] += 1
             screened += 1
             continue
+        # the advert says who may apply, and it isn't you: "must be based in
+        # the United States", "no visa sponsorship". Free, and before any
+        # engine call. Approving the role yourself overrides it.
+        try:
+            from . import geo
+            mine = _allowed(_geo_cfg)
+            where = geo.read_place(_as_text(r.get("location")))["countries"]
+            blocked = "" if r.get("approved") else geo.blocked_by_advert(
+                _as_text(r.get("description") or r.get("summary")), mine, where)
+        except Exception:
+            blocked = ""
+        if blocked:
+            update_role(r["key"], stage="closed", closed_reason=f"screened out: {blocked}")
+            trust_out["not_eligible"] = trust_out.get("not_eligible", 0) + 1
+            screened += 1
+            continue
         ps = prescreen(r, p)
         if not ps["pass"]:
             update_role(r["key"], stage="closed",
@@ -2963,6 +3498,7 @@ def auto_cycle(brain, model=None) -> dict:
             screened += 1
     out["screened_out"] = screened
     out["scams_skipped"], out["ghosts_skipped"] = trust_out["scams"], trust_out["ghosts"]
+    out["not_eligible"] = trust_out.get("not_eligible", 0)
     # replies first: a role that has had an answer shouldn't be chased
     try:
         from . import inbox
@@ -3067,7 +3603,9 @@ def search_config() -> dict:
 
 def save_search_config(cfg: dict) -> dict:
     base = load_config()
-    merged = {**search_config(), **(cfg or {})}
+    # keys beginning "_" are a search's own working notes, never settings
+    merged = {**search_config(), **{k: v for k, v in (cfg or {}).items()
+                                    if not str(k).startswith("_")}}
     for k in ("queries", "exclude", "locations"):
         merged[k] = [s.strip() for s in _as_list(merged.get(k)) if s.strip()]
     base["search"] = merged
@@ -3080,46 +3618,48 @@ def _blob(job: dict) -> str:
                      str(job.get("company", ""))]).lower()
 
 
-_REGION_WORDS = (
-    "worldwide", "anywhere", "global", "remote", "emea", "apac", "latam",
-    "americas", "europe", "asia", "africa", "oceania", "north america",
-    "south america", "middle east", "timezone", "timezones", "gmt", "utc",
-    "cet", "est", "pst", "usa", "united states", "canada", "uk",
-    "united kingdom", "australia", "new zealand", "india", "germany",
-    "france", "spain", "portugal", "poland", "brazil", "argentina",
-    "mexico", "singapore", "japan", "israel", "south africa", "nigeria",
-    "kenya", "egypt", "eu", "european union",
-)
+def _allowed(cfg: dict) -> dict:
+    """Where this person can work (agent/geo.py): the search's own location
+    list when one is set, else the profile's, plus the country they live in.
+    Worked out once per search, not once per role."""
+    got = cfg.get("_allowed")
+    if got is None:
+        from . import geo
+        p = profile()
+        places = cfg.get("locations") or _as_list(p.get("locations_ok"))
+        got = geo.allowed_from(places, home=_as_text(p.get("location")))
+        cfg["_allowed"] = got
+    return got
 
 
 def _is_region_constraint(loc: str) -> bool:
     """Is this a list of regions a remote candidate may live in, rather than
-    an office address? A comma-separated run of region names is the giveaway;
-    a city with a suburb is not."""
-    l = (loc or "").strip().lower().strip(",")
-    if not l:
-        return False
-    parts = [p.strip() for p in l.split(",") if p.strip()]
-    if not parts:
-        return False
-    return all(any(w == p or w in p for w in _REGION_WORDS) for p in parts)
+    an office address? Countries and groupings with no town among them."""
+    from . import geo
+    p = geo.read_place(str(loc or "").strip().strip(","))
+    return bool(p["text"]) and (p["only_regions"] or (p["open"] and not p["unknown"]
+                                                      and bool(geo._OPEN.search(p["text"]))))
 
 
 def _region_includes_me(loc: str, cfg: dict) -> bool:
     """Does that region list cover where this person can work?"""
-    l = (loc or "").lower()
-    if any(w in l for w in ("worldwide", "anywhere", "global")):
-        return True
-    wanted = [w.lower() for w in (cfg.get("locations") or [])]
-    if not wanted:
-        wanted = [w.lower() for w in
-                  _as_list(profile().get("locations_ok"))
-                  if w.strip().lower() != "remote"]
-    if not wanted:
-        return True                    # nothing declared: don't guess
-    # "Africa" covers "South Africa"; so does the country name itself
-    return any(w in l or any(part in w for part in l.split(", "))
-               for w in wanted)
+    from . import geo
+    return geo.decide(loc, _allowed(dict(cfg or {})), remote_only=False, remote=True)[0]
+
+
+def location_verdict(job: dict, cfg: dict) -> tuple:
+    """(keep, category, detail) for a role's location against where you can
+    work. category is what a report groups by ("not remote", "region excludes
+    you", "location not in your list"); detail is the sentence to show ("open
+    only to people in Canada, United States")."""
+    from . import geo
+    return geo.decide(
+        _as_text(job.get("location")), _allowed(cfg),
+        remote_only=bool(cfg.get("remote_only")),
+        # what the board itself said, where it said it: remote or not, the
+        # countries a remote role is open to, the one country a board serves
+        remote=bool(job.get("remote")), countries=job.get("countries") or None,
+        default_country=_as_text(job.get("country")))
 
 
 def matches_search(job: dict, cfg: dict = None) -> tuple[bool, str]:
@@ -3131,47 +3671,147 @@ def matches_search(job: dict, cfg: dict = None) -> tuple[bool, str]:
     for bad in cfg.get("exclude") or []:
         if bad.lower() in blob:
             return False, f"excluded by \u201c{bad}\u201d"
-    loc = str(job.get("location", "")).lower()
-    # Remote boards use this field for WHERE THE CANDIDATE MAY LIVE, not for
-    # an office. "LATAM, Europe, USA, Canada, APAC" is a remote role with a
-    # region constraint, and rejecting it as "not remote" threw away exactly
-    # the roles these boards exist to list.
+    # WHERE: an office somewhere you can't be, or a remote role open only to
+    # people elsewhere. Read by agent/geo.py, which knows the places; the old
+    # word list threw out every plain "Remote" role for anyone who had said
+    # where they can work, kept "Remote, US", and called EMEA not Africa.
     # NOTE: this only settles the LOCATION question. Returning True here
     # short-circuited the search-term and exclusion checks below, so a
     # worldwide-remote role matched every query.
-    region = _is_region_constraint(loc)
-    if region and not _region_includes_me(loc, cfg):
-        return False, "region excludes you"
-    # "Remote only" means "not onsite somewhere I can't be" — not "reject my
-    # own country". A South Africa role was being thrown out for someone in
-    # Johannesburg. The profile already says where they can work, so use it
-    # when no explicit location list has been set.
-    wanted = cfg.get("locations") or []
-    if not wanted:
-        wanted = [l for l in _as_list(profile().get("locations_ok"))
-                  if l.strip().lower() not in ("remote",)]
-    if cfg.get("remote_only") and loc and not region and not any(
-            w in loc for w in ("remote", "anywhere", "worldwide", "global")):
-        if not any(l.lower() in loc for l in wanted):
-            return False, "not remote"
-    # a region list has already been judged above; re-testing it here as if
-    # it were a city rejected roles that _region_includes_me had approved
-    if wanted and loc and not region \
-            and not any(l.lower() in loc for l in wanted) \
-            and not any(w in loc for w in ("remote", "anywhere", "worldwide")):
-        return False, "location not in your list"
+    keep, category, detail = location_verdict(job, cfg)
+    if not keep:
+        job["_skip_detail"] = detail
+        return False, category
     queries = cfg.get("queries") or []
     if not queries and cfg.get("_use_profile_targets"):
         # An unattended run should look for what your profile says you want,
         # rather than everything the boards have. An explicitly empty search
         # box means the opposite — "show me everything" — so this only
         # applies where nobody is typing.
-        queries = derive_queries()
-    if queries and not any(q.lower() in blob for q in queries):
+        queries = cfg.get("_derived")
+        if queries is None:
+            queries = cfg["_derived"] = derive_queries()
+    if queries and not any(q.lower() in blob or _title_has(q, job.get("title", ""))
+                           for q in queries):
         return False, "no search term matched"
     if cfg.get("require_email") and not job.get("apply_email"):
         return False, "no application address"
     return True, ""
+
+
+# How many of your search terms a searchable board is asked for, and the
+# boards that take a page number.
+MAX_QUERIES_PER_SOURCE = 6
+_PAGED = {"stepstone": "page", "himalayas": "page", "arbeitnow": "page"}
+_FEED_KINDS = ("rss", "remotive", "remoteok", "himalayas", "workingnomads", "jobicy",
+               "arbeitnow", "hn")
+
+
+def _source_urls(src: dict, query: str = "") -> list:
+    """The addresses to read for one source: its own, or one for each of your
+    search terms when the board can be searched ({query} in its address).
+
+    A board that lists a hundred thousand roles shows a reader its newest
+    twenty, of which none may be yours. Asked for "data engineer" in your
+    country, the same board returns hundreds that are."""
+    url = str(src.get("url") or "")
+    if query and src.get("kind") == "remotive" and "{query" not in url:
+        return [f"{url}{'&' if '?' in url else '?'}search={query.replace(' ', '+')}"]
+    if "{query" not in url and "{country}" not in url:
+        return [url]
+    from urllib.parse import quote_plus
+    from . import geo
+    if query:
+        terms = [q.strip() for q in re.split(r"[,;]| OR ", query) if q.strip()]
+    else:
+        terms = (search_config().get("queries") or []) or derive_queries()
+    terms = terms[:MAX_QUERIES_PER_SOURCE] or [""]
+    home = geo.read_place(_as_text(profile().get("location")))["countries"]
+    cc = sorted(home)[0] if len(home) == 1 else ""
+    out = []
+    for t in terms:
+        u = (url.replace("{query}", quote_plus(t))
+             .replace("{query-slug}", re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-"))
+             .replace("{country}", cc))
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def _cache_dir() -> Path:
+    d = _dir() / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _fetch_cached(url: str, kind: str, max_age_hours: float = 0) -> str:
+    """Read a source — or, for a board that asks not to be read often, the
+    copy read less than `max_age_hours` ago.
+
+    Himalayas refreshes once a day and says so; Remotive asks for four reads
+    a day at most. A run every two hours has no business asking them twelve
+    times, and nothing to gain: the answer is the same."""
+    if not max_age_hours:
+        return fetch_for_kind(url, kind)
+    import hashlib
+    f = _cache_dir() / (hashlib.sha1(f"{kind}|{url}".encode("utf-8")).hexdigest()[:20] + ".txt")
+    try:
+        if f.exists() and time.time() - f.stat().st_mtime < float(max_age_hours) * 3600:
+            return f.read_text("utf-8")
+    except Exception:
+        pass
+    text = fetch_for_kind(url, kind)
+    try:
+        f.write_text(text, "utf-8")
+        for old in f.parent.glob("*.txt"):          # nothing kept past three days
+            if time.time() - old.stat().st_mtime > 3 * 86400:
+                old.unlink()
+    except Exception:
+        pass
+    return text
+
+
+def read_source(src: dict, query: str = "") -> dict:
+    """Read one source the way its kind needs: {'jobs', 'error', 'html'}.
+
+    One function for a scheduled run, a search you type, and the check made
+    before a board is added, so a fix to how a board is read lands in all
+    three."""
+    kind = src.get("kind", "rss")
+    parser = _PARSERS.get(kind, _parse_jobs_rss)
+    try:
+        pages = max(1, min(5, int(src.get("pages") or 1)))
+    except Exception:
+        pages = 1
+    age = float(src.get("min_hours") or 0)
+    jobs, seen, err, html_seen = [], set(), "", False
+    for url in _source_urls(src, query):
+        for n in range(1, pages + 1):
+            u = url
+            if n > 1:
+                if kind not in _PAGED:
+                    break
+                u = f"{url}{'&' if '?' in url else '?'}{_PAGED[kind]}={n}"
+            try:
+                _CURRENT_SOURCE_URL["url"] = u
+                text = _fetch_cached(u, kind, age)
+                got = [j for j in parser(text) if j.get("title")]
+            except Exception as exc:
+                err = err or _explain_fetch_error(f"{type(exc).__name__}: {exc}", u)
+                break
+            if not got and looks_like_html(text):
+                html_seen = True
+            fresh = 0
+            for j in got:
+                k = j.get("url") or (j.get("company"), j.get("title"))
+                if k in seen:
+                    continue
+                seen.add(k)
+                jobs.append(j)
+                fresh += 1
+            if not fresh:
+                break                      # nothing new on this page: no deeper
+    return {"jobs": jobs, "error": "" if jobs else err, "html": html_seen and not jobs}
 
 
 def _fetch_all(query: str = "") -> tuple[list, list, dict]:
@@ -3192,41 +3832,43 @@ def _fetch_all(query: str = "") -> tuple[list, list, dict]:
         if not src.get("on", True):
             continue
         name = src.get("name", "?")
-        url = src.get("url", "")
-        if query and src.get("kind") == "remotive":
-            sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}search={query.replace(' ', '+')}"
+        kind = src.get("kind", "rss")
         try:
-            kind = src.get("kind", "rss")
-            parser = _PARSERS.get(kind, _parse_jobs_rss)
-            _CURRENT_SOURCE_URL["url"] = url
-            text = fetch_for_kind(url, kind)
-            jobs = [j for j in parser(text) if j.get("title")]
-            # A feed parser handed a web page returns nothing and says
-            # nothing — the source then sits on "pending" for ever. Say what
-            # actually arrived, and what to do about it.
-            if not jobs and kind in ("rss", "remotive", "remoteok") \
-                    and looks_like_html(text):
-                errors.append(
-                    f"{name}: that address returns a web page, not a "
-                    f"{kind} feed. Change this source to 'browser' so it is "
-                    f"rendered like a real visit — sites that draw their "
-                    f"listings with JavaScript, or only after you sign in, "
-                    f"need that.")
-                per_source[name] = 0
-                continue
-            if not jobs and kind == "browser":
-                errors.append(
-                    f"{name}: the page rendered but no roles were found in "
-                    f"it. If this site needs a sign-in, use 'Sign in to this "
-                    f"site' once — the browser keeps the session.")
-            per_source[name] = len(jobs)
-            found.extend(jobs)
+            r = read_source(src, query)
         except Exception as exc:
-            errors.append(f"{name}: "
-                          + _explain_fetch_error(f"{type(exc).__name__}: "
-                                                 f"{exc}", url))
+            r = {"jobs": [], "html": False,
+                 "error": _explain_fetch_error(f"{type(exc).__name__}: {exc}", src.get("url", ""))}
+        jobs = r["jobs"]
+        for j in jobs:
+            # which of YOUR sources it came from: a parser's own label ("RSS",
+            # "Acme (Greenhouse)") is not the name you gave the source, and
+            # counting by it left most sources reporting nothing kept
+            j["_src"] = name
+            if j.get("source") in ("", "RSS", None):
+                j["source"] = name
+        if r["error"]:
+            errors.append(f"{name}: {r['error']}")
             per_source[name] = 0
+            continue
+        # A feed parser handed a web page returns nothing and says
+        # nothing — the source then sits on "pending" for ever. Say what
+        # actually arrived, and what to do about it.
+        if not jobs and kind in _FEED_KINDS and r["html"]:
+            errors.append(
+                f"{name}: that address returns a web page, not a "
+                f"{kind} feed. Change this source to 'browser' so it is "
+                f"rendered like a real visit — sites that draw their "
+                f"listings with JavaScript, or only after you sign in, "
+                f"need that.")
+            per_source[name] = 0
+            continue
+        if not jobs and kind == "browser":
+            errors.append(
+                f"{name}: the page rendered but no roles were found in "
+                f"it. If this site needs a sign-in, use 'Sign in to this "
+                f"site' once — the browser keeps the session.")
+        per_source[name] = len(jobs)
+        found.extend(jobs)
     # recorded here, where every path passes. It used to be recorded only by
     # a keyword search, so a source only ever touched by the daily run stayed
     # "pending" — never checked, as far as the app could tell.
@@ -3435,7 +4077,7 @@ def set_source_kind(name: str, kind: str) -> dict:
     return {"ok": False, "error": f"no source called {name!r}"}
 
 
-def add_job_source(name: str, url: str, kind: str = "rss") -> dict:
+def add_job_source(name: str, url: str, kind: str = "rss", pages=None, min_hours=None) -> dict:
     name = (name or "").strip()
     url = (url or "").strip()
     if not url and name.startswith(("http://", "https://")):
@@ -3453,7 +4095,11 @@ def add_job_source(name: str, url: str, kind: str = "rss") -> dict:
     items = job_sources()
     if any(s.get("url") == url for s in items):
         return {"ok": False, "error": "that URL is already a source"}
-    items.append({"name": name, "url": url, "kind": kind, "on": True})
+    items.append({"name": name, "url": url, "kind": kind, "on": True,
+                  # how deep to read it, and how long its answer is kept
+                  # before it is asked again (its own terms decide both)
+                  **({"pages": int(pages)} if pages else {}),
+                  **({"min_hours": float(min_hours)} if min_hours else {})})
     save_job_sources(items)
     return {"ok": True, "sources": items}
 

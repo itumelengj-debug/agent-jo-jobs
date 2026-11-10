@@ -31,63 +31,89 @@ WORLD = "worldwide"
 # name, url, kind, regions it serves, what it covers.
 # Kept deliberately small and checkable rather than exhaustive — a long list
 # of boards that don't parse is worse than a short list that does.
+# "general" boards cover every field and can be searched for your own job
+# titles ({query} in the address): asked for "data engineer" in your country,
+# a board of a hundred thousand roles returns the few hundred that are yours.
+# "pages" is how deep to read, and "min_hours" how long a board's answer is
+# kept before it is asked again; each is what that board's own terms ask for.
 CATALOGUE = [
     # --- remote, open to anyone ---------------------------------------
+    {"name": "Himalayas", "kind": "himalayas", "general": True,
+     "url": "https://himalayas.app/jobs/api/search?q={query}&country={country}",
+     "pages": 2, "min_hours": 20,
+     "regions": [WORLD], "focus": ["software", "data", "analytics", "ml", "devops", "cloud", "it", "product", "design", "marketing"],
+     "about": "Over 100,000 remote roles; each lists the countries it is open to"},
+    {"name": "Himalayas — newest", "kind": "himalayas", "general": True,
+     "url": "https://himalayas.app/jobs/api/search?q={query}&country={country}&sort=recent",
+     "pages": 1, "min_hours": 20,
+     "regions": [WORLD], "focus": ["software", "data", "analytics", "ml", "devops", "cloud", "it", "product", "design", "marketing"],
+     "about": "The newest remote roles for your job titles"},
     {"name": "Remotive", "kind": "remotive",
-     "url": "https://remotive.com/api/remote-jobs?limit=80",
+     "url": "https://remotive.com/api/remote-jobs?limit=80", "min_hours": 6,
      "regions": [WORLD], "focus": ["software", "data", "product"],
      "about": "Remote roles, worldwide, with a clean API"},
     {"name": "RemoteOK", "kind": "remoteok", "url": "https://remoteok.com/api",
+     "min_hours": 2,
      "regions": [WORLD], "focus": ["software", "data", "design"],
      "about": "Remote roles, worldwide"},
     {"name": "We Work Remotely — programming", "kind": "rss",
      "url": "https://weworkremotely.com/categories/"
-            "remote-programming-jobs.rss",
+            "remote-programming-jobs.rss", "min_hours": 2,
      "regions": [WORLD], "focus": ["software", "data"],
      "about": "Remote engineering roles"},
     {"name": "We Work Remotely — devops/sysadmin", "kind": "rss",
      "url": "https://weworkremotely.com/categories/"
-            "remote-devops-sysadmin-jobs.rss",
+            "remote-devops-sysadmin-jobs.rss", "min_hours": 2,
      "regions": [WORLD], "focus": ["devops", "cloud", "software"],
      "about": "Remote infrastructure roles"},
-    {"name": "Himalayas", "kind": "html",
-     "url": "https://himalayas.app/jobs/countries/south-africa",
-     "regions": [WORLD, "south africa"], "focus": ["software", "data"],
-     "about": "Remote roles open to South Africa"},
-    {"name": "Working Nomads — development", "kind": "rss",
-     "url": "https://www.workingnomads.com/jobsrss/development",
-     "regions": [WORLD], "focus": ["software", "data"],
-     "about": "Remote development roles"},
-    {"name": "Jobicy — data science", "kind": "rss",
-     "url": "https://jobicy.com/?feed=job_feed&job_categories=data-science",
+    {"name": "Working Nomads", "kind": "workingnomads",
+     "url": "https://www.workingnomads.com/api/exposed_jobs/", "min_hours": 3,
+     "regions": [WORLD], "focus": ["software", "data", "marketing", "design"],
+     "about": "Remote roles, many open to Europe and worldwide"},
+    {"name": "Jobicy — data", "kind": "jobicy",
+     "url": "https://jobicy.com/api/v2/remote-jobs?count=100&industry=data-science",
+     "min_hours": 6,
      "regions": [WORLD], "focus": ["data", "analytics", "ml"],
-     "about": "Remote data roles"},
+     "about": "Remote data and analytics roles, with pay"},
+    {"name": "Jobicy — engineering", "kind": "jobicy",
+     "url": "https://jobicy.com/api/v2/remote-jobs?count=100&industry=dev",
+     "min_hours": 6,
+     "regions": [WORLD], "focus": ["software", "devops", "cloud"],
+     "about": "Remote engineering roles, with pay"},
+    {"name": "Jobicy", "kind": "jobicy", "general": True,
+     "url": "https://jobicy.com/api/v2/remote-jobs?count=100", "min_hours": 6,
+     "regions": [WORLD], "focus": ["product", "design", "marketing"],
+     "about": "Remote roles in every field, with pay"},
     {"name": "We Work Remotely — back-end", "kind": "rss",
      "url": "https://weworkremotely.com/categories/"
-            "remote-back-end-programming-jobs.rss",
+            "remote-back-end-programming-jobs.rss", "min_hours": 2,
      "regions": [WORLD], "focus": ["software", "data"],
      "about": "Remote back-end roles"},
     {"name": "We Work Remotely — full-stack", "kind": "rss",
      "url": "https://weworkremotely.com/categories/"
-            "remote-full-stack-programming-jobs.rss",
+            "remote-full-stack-programming-jobs.rss", "min_hours": 2,
      "regions": [WORLD], "focus": ["software"],
      "about": "Remote full-stack roles"},
     {"name": "We Work Remotely — everything else", "kind": "rss",
      "url": "https://weworkremotely.com/categories/all-other-remote-jobs.rss",
+     "min_hours": 2,
      "regions": [WORLD], "focus": ["data", "analytics", "product"],
      "about": "Remote roles outside the main categories"},
     {"name": "Jobspresso", "kind": "rss",
-     "url": "https://jobspresso.co/?feed=job_feed",
+     "url": "https://jobspresso.co/?feed=job_feed", "min_hours": 3,
      "regions": [WORLD], "focus": ["software", "data", "marketing"],
      "about": "Curated remote roles"},
-
-    # --- contract and freelance ----------------------------------------
-    {"name": "Wellfound (AngelList)", "kind": "html",
-     "url": "https://wellfound.com/role/r/data-engineer",
-     "regions": [WORLD], "focus": ["software", "data", "startup"],
-     "about": "Startup roles, many remote"},
+    {"name": "Hacker News — Who is hiring", "kind": "hn",
+     "url": "https://hn.algolia.com/api/v1/search_by_date?tags=story,author_whoishiring&hitsPerPage=6",
+     "min_hours": 12,
+     "regions": [WORLD], "focus": ["software", "data", "ml", "devops"],
+     "about": "The monthly thread: startups hiring, many by email"},
 
     # --- South Africa ---------------------------------------------------
+    {"name": "PNet", "kind": "stepstone", "general": True,
+     "url": "https://www.pnet.co.za/jobs/{query-slug}", "pages": 2, "min_hours": 3,
+     "regions": ["south africa"], "focus": ["software", "data", "analytics", "ml", "devops", "cloud", "it", "product", "design", "marketing"],
+     "about": "South Africa's largest board, searched for your job titles"},
     {"name": "Careers24 — IT", "kind": "html",
      "url": "https://www.careers24.com/jobs/kw-information-technology/",
      "regions": ["south africa"], "focus": ["software", "data", "it"],
@@ -96,16 +122,16 @@ CATALOGUE = [
      "url": "https://www.careerjunction.co.za/jobs/it",
      "regions": ["south africa"], "focus": ["software", "data", "it"],
      "about": "South African IT roles"},
-    {"name": "PNet — IT", "kind": "html",
-     "url": "https://www.pnet.co.za/jobs/information-technology",
-     "regions": ["south africa"], "focus": ["software", "data", "it"],
-     "about": "South African IT roles"},
     {"name": "OfferZen", "kind": "html",
      "url": "https://www.offerzen.com/jobs",
      "regions": ["south africa", "europe"], "focus": ["software", "data"],
      "about": "Developer roles, South Africa and Europe"},
 
-    # --- Europe / UK, useful when remote-friendly -----------------------
+    # --- Europe / UK ----------------------------------------------------
+    {"name": "Arbeitnow", "kind": "arbeitnow", "general": True,
+     "url": "https://www.arbeitnow.com/api/job-board-api", "pages": 2, "min_hours": 3,
+     "regions": ["germany", "europe"], "focus": ["software", "data", "analytics", "ml", "devops", "cloud", "it", "product", "design", "marketing"],
+     "about": "Roles in Germany and across Europe, remote ones marked"},
     {"name": "EU Remote Jobs", "kind": "rss",
      "url": "https://euremotejobs.com/job-region/remote-jobs-europe/feed/",
      "regions": ["europe", WORLD], "focus": ["software", "data"],
@@ -164,16 +190,29 @@ def profile_regions(p: dict) -> list:
 
     Not a judgement about visas — it is what they wrote in `locations_ok`,
     plus remote-worldwide, which is the case where an employer's constraint
-    is usually a timezone rather than a passport."""
+    is usually a timezone rather than a passport. A town implies its country
+    and a country its continent (agent/geo.py), so a board serving "europe"
+    suits someone who wrote "Lisbon"."""
+    from . import geo
     out = [WORLD]
-    for loc in _as_list(p.get("locations_ok")) + [str(p.get("location") or "")]:
+    places = _as_list(p.get("locations_ok")) + [str(p.get("location") or "")]
+    for loc in places:
         loc = loc.strip().lower()
-        if not loc or loc == "remote":
-            continue
-        out.append(loc)
-        # a city implies its country when the profile names one
-        if "johannesburg" in loc or "cape town" in loc or "pretoria" in loc:
-            out.append("south africa")
+        if loc and loc != "remote":
+            out.append(loc)
+    mine = set(geo.allowed_from(_as_list(p.get("locations_ok")),
+                                home=str(p.get("location") or ""))["home"])
+    for code in sorted(mine):
+        out.append(geo.country_name(code).lower())
+    for label, group in (("europe", geo.EUROPE), ("africa", geo.AFRICA), ("asia", geo.ASIA),
+                         ("north america", geo.NORTH_AMERICA), ("latin america", geo.LATAM),
+                         ("oceania", geo.OCEANIA), ("middle east", geo.MIDDLE_EAST)):
+        if mine & set(group):
+            out.append(label)
+    if "US" in mine:
+        out.append("usa")
+    if "GB" in mine:
+        out.append("uk")
     return list(dict.fromkeys(out))
 
 
@@ -194,9 +233,13 @@ def suggest(p: dict = None, include_added: bool = False) -> list:
         if not region_hit:
             continue                      # somewhere you can't work
         focus_hit = [f for f in b["focus"] if f in focus]
-        score = len(focus_hit) * 10 + (5 if WORLD in region_hit else 8)
+        # a board you can search for your own titles beats any category feed
+        score = min(len(focus_hit), 3) * 10 + (5 if WORLD in region_hit else 8) \
+            + (25 if b.get("general") else 0)
         why = []
-        if focus_hit:
+        if b.get("general"):
+            why.append("searched for your own job titles")
+        elif focus_hit:
             why.append("matches your " + ", ".join(focus_hit) + " work")
         if WORLD in region_hit:
             why.append("remote and open worldwide")
@@ -246,32 +289,27 @@ def company_boards(p: dict = None) -> list:
 # --------------------------------------------------------------------------- #
 #  proving a board works before adding it
 # --------------------------------------------------------------------------- #
-def validate(url: str, kind: str) -> dict:
+def validate(url: str, kind: str, src: dict | None = None) -> dict:
     """Fetch it and check it really yields roles.
 
     This is the part that can't be researched — a board either gives a machine
-    something to read or it doesn't, and the only way to know is to try."""
+    something to read or it doesn't, and the only way to know is to try. It is
+    read the way a run will read it (agent/jobscout.py read_source): searched
+    for your job titles if it can be, by its own kind's fetcher."""
     from . import jobscout
-    try:
-        text = jobscout._fetch_workday(url) if kind == "workday" else jobscout._fetch_source(url)
-    except Exception as exc:
-        if kind == "workday":
-            return {"ok": False, "why": jobscout._explain_fetch_error(f"{type(exc).__name__}: {exc}", url)}
+    source = {**(src or {}), "url": url, "kind": kind, "pages": 1}
+    r = jobscout.read_source(source)
+    items = r["jobs"]
+    if r["error"] and kind in ("html", "rss"):
         # a refusal is often just headers; the browser path is the fallback
         try:
-            text = jobscout.fetch_with_browser(url)
+            jobscout._CURRENT_SOURCE_URL["url"] = url
+            items = [j for j in jobscout._PARSERS.get(kind, jobscout._parse_jobs_rss)(
+                jobscout.fetch_with_browser(url)) if j.get("title")]
         except Exception:
-            return {"ok": False,
-                    "why": jobscout._explain_fetch_error(
-                        f"{type(exc).__name__}: {exc}", url)}
-    parser = jobscout._PARSERS.get(kind, jobscout._parse_jobs_rss)
-    try:
-        jobscout._CURRENT_SOURCE_URL["url"] = url
-        items = [j for j in parser(text) if j.get("title")]
-    except Exception as exc:
-        return {"ok": False,
-                "why": f"read the page but couldn't parse it "
-                       f"({type(exc).__name__})"}
+            return {"ok": False, "why": r["error"]}
+    elif r["error"]:
+        return {"ok": False, "why": r["error"]}
     real = [j for j in items
             if not jobscout._is_category_link(j.get("title", ""),
                                               j.get("company", ""))]
@@ -451,13 +489,14 @@ def auto_add(p: dict = None, limit: int = 5) -> dict:
         if len(added) >= limit or tried >= MAX_TRIED:
             break
         tried += 1
-        v = validate(b["url"], b["kind"])
+        v = validate(b["url"], b["kind"], b)
         if not v.get("ok"):
             rejected.append({"name": b["name"], "why": v.get("why", "")})
             rej[b["url"]] = {"at": _iso(), "why": v.get("why", "")[:200]}
             continue
         kind = v.get("kind") or b["kind"]
-        r = jobscout.add_job_source(b["name"], b["url"], kind)
+        r = jobscout.add_job_source(b["name"], b["url"], kind,
+                                    pages=b.get("pages"), min_hours=b.get("min_hours"))
         if r.get("ok"):
             rej.pop(b["url"], None)
             added.append({"name": b["name"], "why": b["why"], "kind": kind,

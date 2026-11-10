@@ -292,8 +292,41 @@ def main() -> None:
         check("jobs.ignores_noreply_and_board_addresses",
               _jb._apply_email("write to no-reply@x.com") == ""
               and _jb._apply_email("via jobs@remoteok.com") == ""
-              and _jb._apply_email("noreply@x.com or hr@real.co")
+              and _jb._apply_email("noreply@x.com, or send your CV to hr@real.co")
               == "hr@real.co")
+        # Found against live boards: the first address in an advert is usually
+        # the small print. Each of these is a real sentence from one.
+        check("jobs.small_print_addresses_are_not_where_you_apply",
+              not any(_jb._apply_email(t) for t in (
+                  "Mitratech will work with applicants requesting accommodation at any "
+                  "stage of the hiring process. Please email recruiting@mitratech.com",
+                  "If you believe you need a reasonable accommodation in order to search "
+                  "for a job opening or to submit an application, please email us at "
+                  "humanresources@lendingtree.com",
+                  "If you've received a message claiming to be Deepgram, please forward "
+                  "it to careers@deepgram.com",
+                  "request a human review of any automated decision. To exercise these "
+                  "rights, please contact recruitment@hopper.com",
+                  "Suspicious messages can be reported to security@linear.app",
+                  "Have any questions? Contact us at jobposting@welocalize.com",
+                  "Our DPO can be reached at dpo@corp.com",
+                  "a bare address proves nothing: hr@real.co")))
+        check("jobs.an_address_the_advert_asks_for_applications_at_is_used",
+              _jb._apply_email("Immediate start. Apply: email careers@polymath.example.org")
+              == "careers@polymath.example.org"
+              and _jb._apply_email("To apply, email support@bcdr.test with your resume")
+              == "support@bcdr.test"
+              and _jb._apply_email("Please send your CV and a short cover letter to "
+                                   "thabo.nkosi@firm.co.za by Friday.") == "thabo.nkosi@firm.co.za"
+              and _jb._apply_email("Interested? Reach out to me directly: founder@startup.io")
+              == "founder@startup.io"
+              and _jb._apply_email("Stack: Rails, Python. Email careers@buildq.ai")
+              == "careers@buildq.ai"
+              and _jb._apply_email("For accommodations email accessibility@corp.com. To apply "
+                                   "send your resume to talent@corp.com") == "talent@corp.com"
+              and _jb._apply_email(_jb._strip_html(
+                  '<p>To apply:</p><a href="mailto:hello@acme.io?subject=Job">click here</a>'))
+              == "hello@acme.io")
 
         # --- auto-apply: fully automated, but only through the gates ----
         import agent.outreach as _jbout
@@ -376,6 +409,9 @@ def main() -> None:
              "candidate_required_location": "Berlin, Germany",
              "description": "Must be in office."}]})
         _jb.JOB_FETCHER = lambda u: _JBFEED if "remotive" in u else "[]"
+        # a remote board's "Berlin, Germany" is a remote role for people in
+        # Germany; it is dropped for someone who has said they live elsewhere
+        _jb.save_profile({**_jb.profile(), "location": "Johannesburg, South Africa"})
         _jb.save_job_sources([
             {"name": "Remotive", "kind": "remotive", "on": True,
              "url": "https://remotive.com/api/remote-jobs"},
@@ -1854,7 +1890,7 @@ def main() -> None:
     for _i, (_ln, _name) in enumerate(_1ffns):
         _end = _1ffns[_i + 1][0] if _i + 1 < len(_1ffns) else len(_1flines)
         _body = "\n".join(_1flines[_ln - 1:_end - 1])
-        if "for src in job_sources():" in _body and "_PARSERS" in _body:
+        if "for src in job_sources():" in _body and ("_PARSERS" in _body or "read_source(" in _body):
             _1floops.append(_name)
     check("sources.only_one_function_fetches_them", _1floops == ["_fetch_all"],
           f"{_1floops}")
@@ -3472,6 +3508,110 @@ def _auto_apply_checks() -> None:
             check("adverts.the_same_vacancy_at_a_named_company_still_merges",
                   J.dedupe_roles().get("removed") == 1)
         section("auto.adverts", adverts)
+
+        # --- what the live boards taught: places, feeds, searchable boards --- #
+        def live():
+            from agent import geo
+            FX = ROOT / "tests" / "fixtures" / "live"
+            A = geo.allowed_from(["Remote", "South Africa"], home="Johannesburg, South Africa")
+            keep = lambda loc, **k: geo.decide(loc, A, remote_only=True, **k)[0]
+            check("geo.plain_remote_is_open_to_you",
+                  keep("Remote") and keep("") and keep("Anywhere in the World") and keep("Worldwide"))
+            check("geo.a_grouping_that_contains_your_country_includes_you",
+                  keep("EMEA") and keep("Remote, Sub-Saharan Africa") and keep("Africa")
+                  and keep("Remote, Nigeria; Remote, South Africa") and not keep("Remote, MENA"))
+            check("geo.remote_for_people_elsewhere_is_not_for_you",
+                  not keep("Remote, United States") and not keep("Remote, US")
+                  and not keep("Remote, South Korea") and not keep("New York, NY (HQ) (remote)")
+                  and not keep("USA Only") and not keep("Toronto, ON (remote)"))
+            check("geo.letters_inside_a_word_are_not_a_country",
+                  geo.read_place("Lausanne")["countries"] == {"CH"}
+                  and geo.read_place("Albuquerque, New Mexico")["countries"] == {"US"}
+                  and "IE" not in geo.read_place("Northern Ireland")["countries"]
+                  and geo.read_place("Remote, Guinea-Bissau")["countries"] == {"GW"})
+            check("geo.your_own_towns_and_their_suburbs_are_yours",
+                  keep("Sandton") and keep("Cape Town: Southern Suburbs") and keep("Kwazulu Natal")
+                  and not keep("Bangalore, India") and not keep("London, UK"))
+            check("geo.a_timezone_is_a_wish_not_a_border", keep("Time zone: CET (+/- 3 hours)"))
+            check("geo.the_boards_own_list_of_countries_decides",
+                  geo.decide("Remote (53 countries)", A, countries=["ZA", "DE"])[0]
+                  and not geo.decide("Remote (2 countries)", A, countries=["US", "CA"])[0]
+                  and geo.decide("Bellville", geo.allowed_from(["South Africa"]),
+                                 default_country="ZA", remote_only=False)[0])
+            check("geo.the_reason_is_a_sentence",
+                  geo.decide("Remote, Canada; Remote, United States", A)[2]
+                  == "open only to people in Canada, United States")
+            check("geo.text_decoded_wrongly_is_put_right_and_good_text_left",
+                  geo.fix_text("M" + chr(0xC3) + chr(0xBC) + "nchen") == "München"
+                  and geo.fix_text("château Zürich") == "château Zürich")
+            e = geo.eligibility("You must be based in the United States. We are unable to sponsor visas.")
+            check("geo.an_advert_that_says_who_may_apply_is_read",
+                  e["countries"] == {"US"} and e["no_sponsorship"]
+                  and "based in United States" in geo.blocked_by_advert(
+                      "You must be based in the United States.", A)
+                  and not geo.blocked_by_advert("Our offices are in New York and London.", A))
+
+            def parse(kind, name, url=""):
+                J._CURRENT_SOURCE_URL["url"] = url
+                return J._PARSERS[kind]((FX / name).read_text("utf-8"))
+            w = parse("rss", "wwr_all.rss", "https://weworkremotely.com/remote-jobs.rss")
+            check("feeds.we_work_remotely_says_who_each_role_is_open_to",
+                  len(w) == 6 and all(j["company"] and j["remote"] and j["closes_at"] for j in w)
+                  and {j["location"] for j in w} <= {"Anywhere in the World", "USA Only", "Europe Only",
+                                                     "Latin America Only", "North America Only"}
+                  and all(len(j["description"]) > 200 for j in w), f"{[(j['company'], j['location']) for j in w]}")
+            jr = parse("rss", "jobicy.rss", "https://jobicy.com/feed") + parse("rss", "jobspresso.rss", "https://jobspresso.co/feed")
+            check("feeds.the_company_the_place_and_the_advert_survive_a_picture_tag",
+                  len(jr) == 6 and all(j["company"] and j["location"] != "Remote" and len(j["description"]) > 200
+                                       for j in jr) and any(j["salary"] for j in jr))
+            h = parse("himalayas", "himalayas.json")
+            check("feeds.himalayas_carries_the_countries_pay_and_closing_date",
+                  len(h) == 4 and all(j["remote"] and j["closes_at"] and j["company"] for j in h)
+                  and all(isinstance(j["countries"], list) for j in h))
+            check("feeds.jobicy_working_nomads_and_arbeitnow_are_read",
+                  len(parse("jobicy", "jobicy.json")) == 4 and len(parse("workingnomads", "workingnomads.json")) == 4
+                  and len(parse("arbeitnow", "arbeitnow.json")) == 4
+                  and all(j["company"] and j["posted_at"] for j in parse("jobicy", "jobicy.json")))
+            pn = parse("stepstone", "pnet.html", "https://www.pnet.co.za/jobs/data-engineer")
+            check("feeds.pnet_is_read_from_its_data_not_its_menu",
+                  len(pn) == 5 and all(j["company"] and j["country"] == "ZA" and j["posted_at"]
+                                       and j["closes_at"] and j["source"] == "PNet" for j in pn))
+            hn = parse("hn", "hn.json")
+            check("feeds.a_hiring_thread_gives_companies_roles_and_who_to_write_to",
+                  len(hn) >= 3 and all(j["company"] and j["title"] and "ycombinator" in j["url"] for j in hn)
+                  and any(j["apply_email"] for j in hn), f"{[(j['company'], j['title']) for j in hn]}")
+            check("search.a_title_is_matched_by_what_it_means",
+                  J._title_has("Data Engineer", "Senior Engineer, Data Platform")
+                  and J._title_has("BI Developer", "Business Intelligence Developer")
+                  and J._title_has("Machine Learning Engineer", "ML Engineer")
+                  and not J._title_has("Data Engineer", "Data Analyst")
+                  and not J._title_has("Data Engineer", "Software Engineer"))
+
+            # a searchable board is asked for each of your titles, in your
+            # country, and no more often than it asks to be
+            fresh()
+            J.save_profile({**J.profile(), "location": "Johannesburg, South Africa",
+                            "target_roles": ["Data Engineer", "BI Developer"],
+                            "locations_ok": ["Remote", "South Africa"]})
+            asked = []
+            page = (FX / "himalayas.json").read_text("utf-8")
+            was = J.JOB_FETCHER
+            J.JOB_FETCHER = lambda url: (asked.append(url) or page)
+            try:
+                src = {"name": "H", "kind": "himalayas", "min_hours": 20,
+                       "url": "https://himalayas.app/jobs/api/search?q={query}&country={country}"}
+                r1 = J.read_source(src)
+                n1 = len(asked)
+                J.read_source(src)
+            finally:
+                J.JOB_FETCHER = was
+            check("search.a_searchable_board_is_asked_for_your_titles_in_your_country",
+                  n1 == 2 and "q=Data+Engineer&country=ZA" in asked[0] and "q=BI+Developer" in asked[1]
+                  and len(r1["jobs"]) == 4, f"{asked}")
+            check("search.a_board_is_not_asked_again_before_it_asks_to_be", len(asked) == n1)
+            check("search.the_default_bar_is_the_scale's_worth_applying", J.AUTO_DEFAULTS["min_score"] == 70
+                  and "70-84" in J._SCORE_SYSTEM and "CV_EXCERPTS" in J._SCORE_SYSTEM)
+        section("auto.live", live)
 
         # --- one run at a time, in the background --------------------------- #
         def runs():
